@@ -18,7 +18,7 @@ import Foundation
 public enum OHTTPEncapsulation {
     public static func encapsulateRequest<PublicKey: HPKEDiffieHellmanPublicKey, Message: DataProtocol>(
         keyID: UInt8, publicKey: PublicKey, ciphersuite: HPKE.Ciphersuite, mediaType: String, content: Message
-    ) throws -> Data {
+    ) throws -> (Data, HPKE.Sender) {
         var header = Self.buildHeader(keyID: keyID, ciphersuite: ciphersuite)
         var sender = try HPKE.Sender(recipientKey: publicKey, ciphersuite: ciphersuite, info: Self.buildInfo(header: header, mediaType: mediaType))
         let ct = try sender.seal(content)
@@ -26,7 +26,7 @@ public enum OHTTPEncapsulation {
         header.append(contentsOf: sender.encapsulatedKey)
         header.append(contentsOf: ct)
 
-        return header
+        return (header, sender)
     }
 
     public static func parseEncapsulatedRequest<Bytes: RandomAccessCollection>(encapsulatedRequest: Bytes) -> EncapsulatedRequest<Bytes.SubSequence>? where Bytes.Element == UInt8 {
@@ -60,16 +60,40 @@ public enum OHTTPEncapsulation {
     ) throws -> Data where EncapsulatedKey.Element == UInt8 {
         let secret = try context.exportSecret(context: Array(mediaType.utf8), ciphersuite: ciphersuite, outputByteCount: ciphersuite.aead.keyByteCount)
         let nonceLength = max(ciphersuite.aead.keyByteCount, ciphersuite.aead.nonceByteCount)
-        var randomBytes = Data(repeating: 0, count: nonceLength)
-        randomBytes.withUnsafeMutableBytes { $0.initializeWithRandomBytes(count: nonceLength) }
+        var responseNonce = Data(repeating: 0, count: nonceLength)
+        responseNonce.withUnsafeMutableBytes { $0.initializeWithRandomBytes(count: nonceLength) }
 
         var salt = Data(encapsulatedKey)
-        salt.append(contentsOf: randomBytes)
+        salt.append(contentsOf: responseNonce)
 
         let prk = ciphersuite.kdf.extract(salt: salt, ikm: secret)
         let aeadKey = ciphersuite.kdf.expand(prk: prk, info: Data("key".utf8), outputByteCount: ciphersuite.aead.keyByteCount)
         let aeadNonce = ciphersuite.kdf.expand(prk: prk, info: Data("nonce".utf8), outputByteCount: ciphersuite.aead.nonceByteCount)
-        
+        let ct = try ciphersuite.aead.seal(content, authenticating: Data(), nonce: Data(aeadNonce), using: aeadKey)
+
+        responseNonce.append(contentsOf: ct)
+        return responseNonce
+    }
+
+    public static func decapsulateResponse<ResponsePayload: DataProtocol>(
+        responsePayload: ResponsePayload, mediaType: String, context: HPKE.Sender, ciphersuite: HPKE.Ciphersuite
+    ) throws -> Data {
+        var payload = responsePayload[...]
+        let nonceLength = max(ciphersuite.aead.keyByteCount, ciphersuite.aead.nonceByteCount)
+        guard let responseNonce = payload.popFirst(nonceLength) else {
+            throw CryptoKitError.incorrectParameterSize
+        }
+
+        let secret = try context.exportSecret(context: Array(mediaType.utf8), ciphersuite: ciphersuite, outputByteCount: ciphersuite.aead.keyByteCount)
+
+        var salt = Data(context.encapsulatedKey)
+        salt.append(contentsOf: responseNonce)
+
+        let prk = ciphersuite.kdf.extract(salt: salt, ikm: secret)
+        let aeadKey = ciphersuite.kdf.expand(prk: prk, info: Data("key".utf8), outputByteCount: ciphersuite.aead.keyByteCount)
+        let aeadNonce = ciphersuite.kdf.expand(prk: prk, info: Data("nonce".utf8), outputByteCount: ciphersuite.aead.nonceByteCount)
+
+        return try ciphersuite.aead.open(payload, nonce: Data(aeadNonce), authenticating: Data(), using: aeadKey)
     }
 
     public struct EncapsulatedRequest<Bytes: RandomAccessCollection & DataProtocol> where Bytes.Element == UInt8, Bytes.SubSequence == Bytes {
@@ -289,6 +313,36 @@ extension HPKE.AEAD {
             fatalError("ExportOnly should not return a tag size.")
         }
     }
+
+    internal func seal<D: DataProtocol, AD: DataProtocol>(_ message: D, authenticating aad: AD, nonce: Data, using key: SymmetricKey) throws -> Data {
+        switch self {
+        case .chaChaPoly:
+            return try ChaChaPoly.seal(message, using: key, nonce: ChaChaPoly.Nonce(data: nonce), authenticating: aad).combined.suffix(from: nonce.count)
+        default:
+            return try AES.GCM.seal(message, using: key, nonce: AES.GCM.Nonce(data: nonce), authenticating: aad).combined!.suffix(from: nonce.count)
+        }
+    }
+
+    internal func open<C: DataProtocol, AD: DataProtocol>(_ ct: C, nonce: Data, authenticating aad: AD, using key: SymmetricKey) throws -> Data {
+        guard ct.count >= self.tagByteCount else {
+            throw HPKE.Errors.expectedPSK
+        }
+
+        switch self {
+        case .AES_GCM_128, .AES_GCM_256: do {
+            let nonce = try AES.GCM.Nonce(data: nonce)
+            let sealedBox = try AES.GCM.SealedBox(nonce: nonce, ciphertext: ct.dropLast(16), tag: ct.suffix(16))
+            return try AES.GCM.open(sealedBox, using: key, authenticating: aad)
+        }
+        case .chaChaPoly: do {
+            let nonce = try ChaChaPoly.Nonce(data: nonce)
+            let sealedBox = try ChaChaPoly.SealedBox(nonce: nonce, ciphertext: ct.dropLast(16), tag: ct.suffix(16))
+            return try ChaChaPoly.open(sealedBox, using: key, authenticating: aad)
+        }
+        case .exportOnly:
+            throw HPKE.Errors.exportOnlyMode
+        }
+    }
 }
 
 // MARK: Temporarily extracted from CryptoKit until API is available for extracting secrets
@@ -321,6 +375,18 @@ extension HPKE.Ciphersuite {
         identifier.append(kdf.identifier)
         identifier.append(aead.identifier)
         return identifier
+    }
+}
+
+extension HPKE.Sender {
+    func exportSecret<Context: DataProtocol>(context: Context, ciphersuite: HPKE.Ciphersuite, outputByteCount: Int) throws -> SymmetricKey {
+        precondition(outputByteCount > 0);
+        return LabeledExpand(prk: self.exporterSecret,
+                             label: Data("sec".utf8),
+                             info: context,
+                             outputByteCount: UInt16(outputByteCount),
+                             suiteID: ciphersuite.identifier,
+                             kdf: ciphersuite.kdf)
     }
 }
 
@@ -410,6 +476,12 @@ extension UnsafeMutableRawBufferPointer {
             remainingWord >>= 8
             targetPtr = UnsafeMutableRawBufferPointer(rebasing: targetPtr[1...])
         }
+    }
+}
+
+extension Data {
+    init(_ key: SymmetricKey) {
+        self = key.withUnsafeBytes { Data($0) }
     }
 }
 

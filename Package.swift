@@ -45,5 +45,12 @@ let package = Package(
             dependencies: [
                 .product(name: "Crypto", package: "swift-crypto"),
             ]),
+        .testTarget(
+            name: "ObliviousXTests",
+            dependencies: [
+                "ObliviousX",
+                .product(name: "Crypto", package: "swift-crypto"),
+            ]
+        )
     ]
 )
