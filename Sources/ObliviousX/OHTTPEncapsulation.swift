@@ -426,7 +426,7 @@ extension HPKE.KDF {
     }
 }
 
-internal func LabeledExpand<Info: DataProtocol>(prk: CryptoKit.SymmetricKey, label: Data, info: Info, outputByteCount: UInt16, suiteID: Data, kdf: HPKE.KDF) -> CryptoKit.SymmetricKey {
+internal func LabeledExpand<Info: DataProtocol>(prk: SymmetricKey, label: Data, info: Info, outputByteCount: UInt16, suiteID: Data, kdf: HPKE.KDF) -> SymmetricKey {
     var labeled_info = I2OSP(value: Int(outputByteCount), outputByteCount: 2)
     labeled_info.append(protocolLabel)
     labeled_info.append(suiteID)
