@@ -58,42 +58,33 @@ public enum OHTTPEncapsulation {
     public static func encapsulateResponse<Message: DataProtocol, EncapsulatedKey: RandomAccessCollection> (
         context: HPKE.Recipient, encapsulatedKey: EncapsulatedKey,  mediaType: String, ciphersuite: HPKE.Ciphersuite, content: Message
     ) throws -> Data where EncapsulatedKey.Element == UInt8 {
-        let secret = try context.exportSecret(context: Array(mediaType.utf8), ciphersuite: ciphersuite, outputByteCount: ciphersuite.aead.keyByteCount)
-        let nonceLength = max(ciphersuite.aead.keyByteCount, ciphersuite.aead.nonceByteCount)
-        var responseNonce = Data(repeating: 0, count: nonceLength)
-        responseNonce.withUnsafeMutableBytes { $0.initializeWithRandomBytes(count: nonceLength) }
-
-        var salt = Data(encapsulatedKey)
-        salt.append(contentsOf: responseNonce)
-
-        let prk = ciphersuite.kdf.extract(salt: salt, ikm: secret)
-        let aeadKey = ciphersuite.kdf.expand(prk: prk, info: Data("key".utf8), outputByteCount: ciphersuite.aead.keyByteCount)
-        let aeadNonce = ciphersuite.kdf.expand(prk: prk, info: Data("nonce".utf8), outputByteCount: ciphersuite.aead.nonceByteCount)
-        let ct = try ciphersuite.aead.seal(content, authenticating: Data(), nonce: Data(aeadNonce), using: aeadKey)
-
-        responseNonce.append(contentsOf: ct)
-        return responseNonce
+        var streamingResponse = try StreamingResponse(context: context, encapsulatedKey: encapsulatedKey, mediaType: mediaType, ciphersuite: ciphersuite)
+        return try streamingResponse.encapsulate(content, final: true)
     }
 
     public static func decapsulateResponse<ResponsePayload: DataProtocol>(
         responsePayload: ResponsePayload, mediaType: String, context: HPKE.Sender, ciphersuite: HPKE.Ciphersuite
     ) throws -> Data {
-        var payload = responsePayload[...]
-        let nonceLength = max(ciphersuite.aead.keyByteCount, ciphersuite.aead.nonceByteCount)
-        guard let responseNonce = payload.popFirst(nonceLength) else {
-            throw CryptoKitError.incorrectParameterSize
-        }
+        var streamingDecapsulator = StreamingResponseDecapsulator(mediaType: mediaType, context: context, ciphersuite: ciphersuite)
 
-        let secret = try context.exportSecret(context: Array(mediaType.utf8), ciphersuite: ciphersuite, outputByteCount: ciphersuite.aead.keyByteCount)
-
-        var salt = Data(context.encapsulatedKey)
-        salt.append(contentsOf: responseNonce)
-
-        let prk = ciphersuite.kdf.extract(salt: salt, ikm: secret)
-        let aeadKey = ciphersuite.kdf.expand(prk: prk, info: Data("key".utf8), outputByteCount: ciphersuite.aead.keyByteCount)
-        let aeadNonce = ciphersuite.kdf.expand(prk: prk, info: Data("nonce".utf8), outputByteCount: ciphersuite.aead.nonceByteCount)
-
-        return try ciphersuite.aead.open(payload, nonce: Data(aeadNonce), authenticating: Data(), using: aeadKey)
+        // Currently this cannot return nil, as it does no internal buffering.
+        return try streamingDecapsulator.decapsulate(responsePayload, final: true)!
+//        var payload = responsePayload[...]
+//        let nonceLength = max(ciphersuite.aead.keyByteCount, ciphersuite.aead.nonceByteCount)
+//        guard let responseNonce = payload.popFirst(nonceLength) else {
+//            throw CryptoKitError.incorrectParameterSize
+//        }
+//
+//        let secret = try context.exportSecret(context: Array(mediaType.utf8), ciphersuite: ciphersuite, outputByteCount: ciphersuite.aead.keyByteCount)
+//
+//        var salt = Data(context.encapsulatedKey)
+//        salt.append(contentsOf: responseNonce)
+//
+//        let prk = ciphersuite.kdf.extract(salt: salt, ikm: secret)
+//        let aeadKey = ciphersuite.kdf.expand(prk: prk, info: Data("key".utf8), outputByteCount: ciphersuite.aead.keyByteCount)
+//        let aeadNonce = ciphersuite.kdf.expand(prk: prk, info: Data("nonce".utf8), outputByteCount: ciphersuite.aead.nonceByteCount)
+//
+//        return try ciphersuite.aead.open(payload, nonce: Data(aeadNonce), authenticating: Data(), using: aeadKey)
     }
 
     public struct EncapsulatedRequest<Bytes: RandomAccessCollection & DataProtocol> where Bytes.Element == UInt8, Bytes.SubSequence == Bytes {
@@ -131,6 +122,123 @@ public enum OHTTPEncapsulation {
             )
             let decrypted = try recipient.open(self.ct)
             return (decrypted, recipient)
+        }
+    }
+
+    public struct StreamingResponse {
+        private let responseNonce: Data
+
+        private var aeadNonce: Data
+
+        private let aeadKey: SymmetricKey
+
+        private let aead: HPKE.AEAD
+
+        private var counter: UInt64
+
+        public init<EncapsulatedKey: RandomAccessCollection> (
+            context: HPKE.Recipient, encapsulatedKey: EncapsulatedKey,  mediaType: String, ciphersuite: HPKE.Ciphersuite
+        ) throws where EncapsulatedKey.Element == UInt8 {
+            let secret = try context.exportSecret(context: Array(mediaType.utf8), ciphersuite: ciphersuite, outputByteCount: ciphersuite.aead.keyByteCount)
+            let nonceLength = max(ciphersuite.aead.keyByteCount, ciphersuite.aead.nonceByteCount)
+            var responseNonce = Data(repeating: 0, count: nonceLength)
+            responseNonce.withUnsafeMutableBytes { $0.initializeWithRandomBytes(count: nonceLength) }
+
+            self.responseNonce = responseNonce
+
+            var salt = Data(encapsulatedKey)
+            salt.append(contentsOf: responseNonce)
+
+            let prk = ciphersuite.kdf.extract(salt: salt, ikm: secret)
+            self.aeadKey = ciphersuite.kdf.expand(prk: prk, info: Data("key".utf8), outputByteCount: ciphersuite.aead.keyByteCount)
+            self.aeadNonce = Data(ciphersuite.kdf.expand(prk: prk, info: Data("nonce".utf8), outputByteCount: ciphersuite.aead.nonceByteCount))
+            self.aead = ciphersuite.aead
+            self.counter = 0
+        }
+
+        public mutating func encapsulate<Message: DataProtocol>(_ message: Message, final: Bool, includeEncapsulationWrapper: Bool = false) throws -> Data {
+            // Right now we can't add the encapsulation wrapper because it is broken in the draft spec.
+            precondition(includeEncapsulationWrapper == false)
+
+            // We temporarily mutate the AEAD nonce. To avoid intermediate allocations, we mutate in place and
+            // return it back by xoring again.
+            let counter = self.counter
+            self.aeadNonce.xor(with: counter)
+            defer {
+                self.aeadNonce.xor(with: counter)
+            }
+
+            let ct = try self.aead.seal(message, authenticating: Data(), nonce: self.aeadNonce, using: self.aeadKey)
+
+            // This defer is here to avoid us doing it if we throw above.
+            defer {
+                self.counter += 1
+            }
+
+            if counter == 0 {
+                return self.responseNonce + ct
+            } else {
+                return ct
+            }
+        }
+    }
+
+    public struct StreamingResponseDecapsulator {
+        enum State {
+            case awaitingResponseNonce(mediaType: String, context: HPKE.Sender, ciphersuite: HPKE.Ciphersuite)
+            case responseNonceGenerated(aeadNonce: Data, aeadKey: SymmetricKey, aead: HPKE.AEAD, counter: UInt64)
+        }
+
+        private var state: State
+
+        public init(mediaType: String, context: HPKE.Sender, ciphersuite: HPKE.Ciphersuite) {
+            self.state = .awaitingResponseNonce(mediaType: mediaType, context: context, ciphersuite: ciphersuite)
+        }
+
+        public mutating func decapsulate<Message: DataProtocol>(_ message: Message, final: Bool, expectEncapsulationWrapper: Bool = false) throws -> Data? {
+            // Right now we can't process the encapsulation wrapper because it is broken in the draft spec.
+            precondition(expectEncapsulationWrapper == false)
+
+            var aeadNonce: Data
+            let aeadKey: SymmetricKey
+            let aead: HPKE.AEAD
+            let counter: UInt64
+            let ciphertext: Message.SubSequence
+
+            switch self.state {
+            case .awaitingResponseNonce(mediaType: let mediaType, context: let context, ciphersuite: let ciphersuite):
+                var payload = message[...]
+                let nonceLength = max(ciphersuite.aead.keyByteCount, ciphersuite.aead.nonceByteCount)
+                guard let responseNonce = payload.popFirst(nonceLength) else {
+                    throw CryptoKitError.incorrectParameterSize
+                }
+
+                let secret = try context.exportSecret(context: Array(mediaType.utf8), ciphersuite: ciphersuite, outputByteCount: ciphersuite.aead.keyByteCount)
+
+                var salt = Data(context.encapsulatedKey)
+                salt.append(contentsOf: responseNonce)
+
+                let prk = ciphersuite.kdf.extract(salt: salt, ikm: secret)
+                aeadKey = ciphersuite.kdf.expand(prk: prk, info: Data("key".utf8), outputByteCount: ciphersuite.aead.keyByteCount)
+                aeadNonce = Data(ciphersuite.kdf.expand(prk: prk, info: Data("nonce".utf8), outputByteCount: ciphersuite.aead.nonceByteCount))
+                aead = ciphersuite.aead
+                counter = 0
+                ciphertext = payload
+
+                // Save the state. Counter is at 1 for the next run.
+                self.state = .responseNonceGenerated(aeadNonce: aeadNonce, aeadKey: aeadKey, aead: aead, counter: 1)
+            case .responseNonceGenerated(aeadNonce: let nonce, aeadKey: let key, aead: let cipher, counter: let c):
+                aeadNonce = nonce
+                aeadKey = key
+                aead = cipher
+                counter = c
+                ciphertext = message[...]
+
+                self.state = .responseNonceGenerated(aeadNonce: nonce, aeadKey: key, aead: cipher, counter: c + 1)
+            }
+
+            aeadNonce.xor(with: counter)
+            return try aead.open(ciphertext, nonce: aeadNonce, authenticating: Data(), using: aeadKey)
         }
     }
 
@@ -180,6 +288,22 @@ extension Data {
     mutating func append(bigEndianBytes: UInt16) {
         self.append(UInt8(truncatingIfNeeded: bigEndianBytes >> 8))
         self.append(UInt8(truncatingIfNeeded: bigEndianBytes))
+    }
+}
+
+extension Data {
+    mutating func xor(with value: UInt64) {
+        // We handle value in network byte order.
+        precondition(self.count >= 8)
+
+        var index = self.endIndex
+        for byteNumber in 0..<8 {
+            // Unchecked math in here is all sound, byteNumber is between 0 and 8 and index is
+            // always positive.
+            let byte = UInt8(truncatingIfNeeded: (value >> (byteNumber &* 8)))
+            index &-= 1
+            self[index] ^= byte
+        }
     }
 }
 
