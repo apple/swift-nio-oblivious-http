@@ -46,6 +46,15 @@ let package = Package(
                 .product(name: "Crypto", package: "swift-crypto"),
             ]),
         .testTarget(
+            name: "ObliviousHTTPTests",
+            dependencies: [
+                "ObliviousHTTP",
+                .product(name: "Crypto", package: "swift-crypto"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+            ]
+        ),
+        .testTarget(
             name: "ObliviousXTests",
             dependencies: [
                 "ObliviousX",
