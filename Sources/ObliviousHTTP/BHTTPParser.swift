@@ -14,28 +14,28 @@
 import NIOCore
 import NIOHTTP1
 
-struct BHTTPParser {
+public struct BHTTPParser {
     private var buffer: ByteBuffer?
     private var state: State
     private var role: Role
     private var readEOF: Bool
 
-    init(role: Role) {
+    public init(role: Role) {
         self.buffer = nil
         self.state = .idle
         self.role = role
         self.readEOF = false
     }
 
-    mutating func append(_ buffer: ByteBuffer) {
+    public mutating func append(_ buffer: ByteBuffer) {
         self.buffer.setOrWriteImmutableBuffer(buffer)
     }
 
-    mutating func completeBodyReceived() {
+    public mutating func completeBodyReceived() {
         self.readEOF = true
     }
 
-    mutating func nextMessage() throws -> Message? {
+    public mutating func nextMessage() throws -> Message? {
         while true {
             let parseResult: ParseResult
             
@@ -392,7 +392,7 @@ extension BHTTPParser {
         }
     }
 
-    enum Role {
+    public enum Role {
         case client
         case server
 
@@ -415,7 +415,7 @@ extension BHTTPParser {
         }
     }
 
-    enum Message {
+    public enum Message {
         case request(HTTPServerRequestPart)
         case response(HTTPClientResponsePart)
     }

@@ -20,8 +20,10 @@ import NIOHTTP1
 // it wrong.
 //
 // Later optimizations can be made by adding more state into this type.
-struct BHTTPSerializer {
-    func serialize(_ message: Message, into buffer: inout ByteBuffer) {
+public struct BHTTPSerializer {
+    public init() { }
+    
+    public func serialize(_ message: Message, into buffer: inout ByteBuffer) {
         switch message {
         case .request(.head(let requestHead)):
             Self.serializeRequestHead(requestHead, into: &buffer)
@@ -85,7 +87,7 @@ struct BHTTPSerializer {
 }
 
 extension BHTTPSerializer {
-    enum Message {
+    public enum Message {
         case request(HTTPClientRequestPart)
         case response(HTTPServerResponsePart)
     }
