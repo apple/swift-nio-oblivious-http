@@ -19,17 +19,44 @@ public enum OHTTPEncapsulation {
     public static func encapsulateRequest<PublicKey: HPKEDiffieHellmanPublicKey, Message: DataProtocol>(
         keyID: UInt8, publicKey: PublicKey, ciphersuite: HPKE.Ciphersuite, mediaType: String, content: Message
     ) throws -> (Data, HPKE.Sender) {
-        var header = Self.buildHeader(keyID: keyID, ciphersuite: ciphersuite)
-        var sender = try HPKE.Sender(recipientKey: publicKey, ciphersuite: ciphersuite, info: Self.buildInfo(header: header, mediaType: mediaType))
-        let ct = try sender.seal(content)
-
-        header.append(contentsOf: sender.encapsulatedKey)
-        header.append(contentsOf: ct)
-
-        return (header, sender)
+        var streamer = try StreamingRequest(keyID: keyID, publicKey: publicKey, ciphersuite: ciphersuite, mediaType: mediaType)
+        return try (streamer.encapsulate(content: content, final: false), streamer.sender)
     }
 
-    public static func parseEncapsulatedRequest<Bytes: RandomAccessCollection>(encapsulatedRequest: Bytes) -> EncapsulatedRequest<Bytes.SubSequence>? where Bytes.Element == UInt8 {
+    public struct StreamingRequest {
+        private var header: Data?
+        public private(set) var sender: HPKE.Sender
+
+        public init<PublicKey: HPKEDiffieHellmanPublicKey>(
+            keyID: UInt8, publicKey: PublicKey, ciphersuite: HPKE.Ciphersuite, mediaType: String
+        ) throws {
+            self.header = OHTTPEncapsulation.buildHeader(keyID: keyID, ciphersuite: ciphersuite)
+            self.sender = try HPKE.Sender(
+                recipientKey: publicKey,
+                ciphersuite: ciphersuite,
+                info: OHTTPEncapsulation.buildInfo(header: self.header!, mediaType: mediaType)
+            )
+            self.header!.append(self.sender.encapsulatedKey)
+        }
+        
+        public mutating func encapsulate<Message: DataProtocol>(content: Message, final: Bool, includeEncapsulationWrapper: Bool = false) throws -> Data {
+            // Right now we can't add the encapsulation wrapper because it is broken in the draft spec.
+            precondition(includeEncapsulationWrapper == false)
+            var body: Data
+
+            if let header = self.header {
+                body = header
+                self.header = nil
+            } else {
+                body = Data()
+            }
+
+            try body.append(sender.seal(content))
+            return body
+        }
+    }
+
+    public static func parseRequestHeader<Bytes: RandomAccessCollection>(encapsulatedRequest: Bytes) -> (RequestHeader, Int)? where Bytes.Element == UInt8 {
         guard encapsulatedRequest.count >= 7 else {
             return nil
         }
@@ -44,15 +71,62 @@ public enum OHTTPEncapsulation {
             return nil
         }
 
-        return EncapsulatedRequest(
+        let decapsulator = RequestHeader(
             keyID: keyID,
             kem: kem,
             kdf: kdf,
             aead: aead,
-            header: header,
-            encapsulatedKey: encapsulatedKey,
-            ct: bytes
+            headerBytes: Data(header),
+            encapsulatedKey: Data(encapsulatedKey)
         )
+        return (decapsulator, 7 + kem.encapsulatedKeySize)
+    }
+
+    public struct RequestHeader {
+        public private(set) var keyID: UInt8
+
+        public private(set) var kem: HPKE.KEM
+
+        public private(set) var kdf: HPKE.KDF
+
+        public private(set) var aead: HPKE.AEAD
+
+        public private(set) var headerBytes: Data
+
+        public private(set) var encapsulatedKey: Data
+
+        internal init(keyID: UInt8, kem: HPKE.KEM, kdf: HPKE.KDF, aead: HPKE.AEAD, headerBytes: Data, encapsulatedKey: Data) {
+            self.keyID = keyID
+            self.kem = kem
+            self.kdf = kdf
+            self.aead = aead
+            self.headerBytes = headerBytes
+            self.encapsulatedKey = encapsulatedKey
+        }
+    }
+
+    public struct StreamingRequestDecapsulator {
+        public private(set) var header: RequestHeader
+
+        public private(set) var recipient: HPKE.Recipient
+
+        public init<PrivateKey: HPKEDiffieHellmanPrivateKey>(requestHeader: RequestHeader, mediaType: String, privateKey: PrivateKey) throws {
+            self.header = requestHeader
+            let info = OHTTPEncapsulation.buildInfo(header: self.header.headerBytes, mediaType: mediaType)
+            self.recipient = try HPKE.Recipient(
+                privateKey: privateKey,
+                ciphersuite: HPKE.Ciphersuite(kem: self.header.kem, kdf: self.header.kdf, aead: self.header.aead),
+                info: info,
+                encapsulatedKey: self.header.encapsulatedKey
+            )
+        }
+
+        public mutating func decapsulate<Message: DataProtocol>(content: Message, final: Bool, includeEncapsulationWrapper: Bool = false) throws -> Data {
+            // Right now we can't add the encapsulation wrapper because it is broken in the draft spec.
+            precondition(includeEncapsulationWrapper == false)
+
+            return try self.recipient.open(content)
+        }
     }
 
     public static func encapsulateResponse<Message: DataProtocol, EncapsulatedKey: RandomAccessCollection> (
@@ -69,59 +143,22 @@ public enum OHTTPEncapsulation {
 
         // Currently this cannot return nil, as it does no internal buffering.
         return try streamingDecapsulator.decapsulate(responsePayload, final: true)!
-//        var payload = responsePayload[...]
-//        let nonceLength = max(ciphersuite.aead.keyByteCount, ciphersuite.aead.nonceByteCount)
-//        guard let responseNonce = payload.popFirst(nonceLength) else {
-//            throw CryptoKitError.incorrectParameterSize
-//        }
-//
-//        let secret = try context.exportSecret(context: Array(mediaType.utf8), ciphersuite: ciphersuite, outputByteCount: ciphersuite.aead.keyByteCount)
-//
-//        var salt = Data(context.encapsulatedKey)
-//        salt.append(contentsOf: responseNonce)
-//
-//        let prk = ciphersuite.kdf.extract(salt: salt, ikm: secret)
-//        let aeadKey = ciphersuite.kdf.expand(prk: prk, info: Data("key".utf8), outputByteCount: ciphersuite.aead.keyByteCount)
-//        let aeadNonce = ciphersuite.kdf.expand(prk: prk, info: Data("nonce".utf8), outputByteCount: ciphersuite.aead.nonceByteCount)
-//
-//        return try ciphersuite.aead.open(payload, nonce: Data(aeadNonce), authenticating: Data(), using: aeadKey)
     }
 
-    public struct EncapsulatedRequest<Bytes: RandomAccessCollection & DataProtocol> where Bytes.Element == UInt8, Bytes.SubSequence == Bytes {
-        public private(set) var keyID: UInt8
+    public struct RequestDecapsulator<Bytes: RandomAccessCollection & DataProtocol> where Bytes.Element == UInt8, Bytes.SubSequence == Bytes {
+        public private(set) var header: RequestHeader
 
-        public private(set) var kem: HPKE.KEM
+        public private(set) var message: Bytes
 
-        public private(set) var kdf: HPKE.KDF
-
-        public private(set) var aead: HPKE.AEAD
-
-        public private(set) var header: Bytes
-
-        public private(set) var encapsulatedKey: Bytes
-
-        public private(set) var ct: Bytes
-
-        init(keyID: UInt8, kem: HPKE.KEM, kdf: HPKE.KDF, aead: HPKE.AEAD, header: Bytes, encapsulatedKey: Bytes, ct: Bytes) {
-            self.keyID = keyID
-            self.kem = kem
-            self.kdf = kdf
-            self.aead = aead
-            self.header = header
-            self.encapsulatedKey = encapsulatedKey
-            self.ct = ct
+        public init(requestHeader: RequestHeader, message: Bytes) {
+            self.header = requestHeader
+            self.message = message
         }
 
         public func decapsulate<PrivateKey: HPKEDiffieHellmanPrivateKey>(mediaType: String, privateKey: PrivateKey) throws -> (Data, HPKE.Recipient) {
-            let info = OHTTPEncapsulation.buildInfo(header: Data(self.header), mediaType: mediaType)
-            var recipient = try HPKE.Recipient(
-                privateKey: privateKey,
-                ciphersuite: HPKE.Ciphersuite(kem: self.kem, kdf: self.kdf, aead: self.aead),
-                info: info,
-                encapsulatedKey: Data(self.encapsulatedKey)
-            )
-            let decrypted = try recipient.open(self.ct)
-            return (decrypted, recipient)
+            var decapsulator = try StreamingRequestDecapsulator(requestHeader: self.header, mediaType: mediaType, privateKey: privateKey)
+            let decrypted = try decapsulator.decapsulate(content: self.message, final: true)
+            return (decrypted, decapsulator.recipient)
         }
     }
 
