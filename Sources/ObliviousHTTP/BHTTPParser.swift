@@ -131,12 +131,13 @@ struct BHTTPParser {
         }
 
         var headers = HTTPHeaders()
-        if authority.readableBytes > 0 {
-            headers.add(name: "Host", value: String(buffer: authority))
-        }
 
         if var fieldSection = possibleFieldSection {
             try Self.parseFieldSection(&fieldSection, into: &headers)
+        }
+
+        if authority.readableBytes > 0 && !headers.contains(name: "host") {
+            headers.add(name: "host", value: String(buffer: authority))
         }
 
         let head = HTTPRequestHead(

@@ -48,4 +48,43 @@ extension ByteBuffer {
         }
         return slice
     }
+
+    @discardableResult
+    mutating func writeVarint(_ value: Int) -> Int {
+        switch value {
+        case 0..<63:
+            // Easy, store the value. The top two bits are 0 so we don't need to do any masking.
+            return self.writeInteger(UInt8(truncatingIfNeeded: value))
+        case 0..<16383:
+            // Set the top two bit mask, then write the value.
+            let value = UInt16(truncatingIfNeeded: value) | (0x40 << 8)
+            return self.writeInteger(value)
+        case 0..<1073741823:
+            // Set the top two bit mask, then write the value.
+            let value = UInt32(truncatingIfNeeded: value) | (0x80 << 24)
+            return self.writeInteger(value)
+        case 0..<4611686018427387903:
+            // Set the top two bit mask, then write the value.
+            let value = UInt64(truncatingIfNeeded: value) | (0xC0 << 56)
+            return self.writeInteger(value)
+        default:
+            fatalError()
+        }
+    }
+
+    @discardableResult
+    mutating func writeVarintPrefixedImmutableBuffer(_ buffer: ByteBuffer) -> Int {
+        var written = 0
+        written += self.writeVarint(buffer.readableBytes)
+        written += self.writeImmutableBuffer(buffer)
+        return written
+    }
+
+    @discardableResult
+    mutating func writeVarintPrefixedString(_ string: String) -> Int {
+        var written = 0
+        written += self.writeVarint(string.utf8.count)
+        written += self.writeString(string)
+        return written
+    }
 }
