@@ -157,19 +157,17 @@ final class ObliviousXTests: XCTestCase {
             try encapsulator.encapsulate(content: $0, final: false)
         }
 
-        let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(encapsulatedRequest: encapsulatedMessages.first!)!
+        let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(encapsulatedRequest: encapsulator.header)!
         XCTAssertEqual(parsed.keyID, 66)
         XCTAssertEqual(parsed.kem, .P256_HKDF_SHA256)
         XCTAssertEqual(parsed.kdf, .HKDF_SHA256)
         XCTAssertEqual(parsed.aead, .AES_GCM_256)
+        XCTAssertEqual(consumedBytes, encapsulator.header.count)
 
         var decapsulator = try OHTTPEncapsulation.StreamingRequestDecapsulator(requestHeader: parsed, mediaType: mediaType, privateKey: serverKey)
 
-        var decapsulated: [Data] = []
-        try decapsulated.append(decapsulator.decapsulate(content: encapsulatedMessages.first!.dropFirst(consumedBytes), final: false))
-
-        for message in encapsulatedMessages.dropFirst() {
-            try decapsulated.append(decapsulator.decapsulate(content: message, final: false))
+        let decapsulated: [Data] = try encapsulatedMessages.map { message in
+            try decapsulator.decapsulate(content: message, final: false)
         }
 
         XCTAssertEqual(messages, decapsulated)

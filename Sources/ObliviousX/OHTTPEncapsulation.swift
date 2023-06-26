@@ -20,39 +20,32 @@ public enum OHTTPEncapsulation {
         keyID: UInt8, publicKey: PublicKey, ciphersuite: HPKE.Ciphersuite, mediaType: String, content: Message
     ) throws -> (Data, HPKE.Sender) {
         var streamer = try StreamingRequest(keyID: keyID, publicKey: publicKey, ciphersuite: ciphersuite, mediaType: mediaType)
-        return try (streamer.encapsulate(content: content, final: false), streamer.sender)
+        var payload = streamer.header
+        try payload.append(streamer.encapsulate(content: content, final: false))
+        return (payload, streamer.sender)
     }
 
     public struct StreamingRequest {
-        private var header: Data?
+        public let header: Data
         public private(set) var sender: HPKE.Sender
 
         public init<PublicKey: HPKEDiffieHellmanPublicKey>(
             keyID: UInt8, publicKey: PublicKey, ciphersuite: HPKE.Ciphersuite, mediaType: String
         ) throws {
-            self.header = OHTTPEncapsulation.buildHeader(keyID: keyID, ciphersuite: ciphersuite)
+            var header = OHTTPEncapsulation.buildHeader(keyID: keyID, ciphersuite: ciphersuite)
             self.sender = try HPKE.Sender(
                 recipientKey: publicKey,
                 ciphersuite: ciphersuite,
-                info: OHTTPEncapsulation.buildInfo(header: self.header!, mediaType: mediaType)
+                info: OHTTPEncapsulation.buildInfo(header: header, mediaType: mediaType)
             )
-            self.header!.append(self.sender.encapsulatedKey)
+            header.append(self.sender.encapsulatedKey)
+            self.header = header
         }
         
         public mutating func encapsulate<Message: DataProtocol>(content: Message, final: Bool, includeEncapsulationWrapper: Bool = false) throws -> Data {
             // Right now we can't add the encapsulation wrapper because it is broken in the draft spec.
             precondition(includeEncapsulationWrapper == false)
-            var body: Data
-
-            if let header = self.header {
-                body = header
-                self.header = nil
-            } else {
-                body = Data()
-            }
-
-            try body.append(sender.seal(content))
-            return body
+            return try self.sender.seal(content)
         }
     }
 
