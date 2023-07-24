@@ -534,25 +534,33 @@ extension HPKE.Ciphersuite {
 
 extension HPKE.Sender {
     func exportSecret<Context: DataProtocol>(context: Context, ciphersuite: HPKE.Ciphersuite, outputByteCount: Int) throws -> SymmetricKey {
-        precondition(outputByteCount > 0);
+        #if canImport(Darwin)
+        return try self.exportSecret(context: context, outputByteCount: outputByteCount)
+        #else
+        precondition(outputByteCount > 0)
         return LabeledExpand(prk: self.exporterSecret,
                              label: Data("sec".utf8),
                              info: context,
                              outputByteCount: UInt16(outputByteCount),
                              suiteID: ciphersuite.identifier,
                              kdf: ciphersuite.kdf)
+        #endif
     }
 }
 
 extension HPKE.Recipient {
     func exportSecret<Context: DataProtocol>(context: Context, ciphersuite: HPKE.Ciphersuite, outputByteCount: Int) throws -> SymmetricKey {
-        precondition(outputByteCount > 0);
+        #if canImport(Darwin)
+        return try self.exportSecret(context: context, outputByteCount: outputByteCount)
+        #else
+        precondition(outputByteCount > 0)
         return LabeledExpand(prk: self.exporterSecret,
                              label: Data("sec".utf8),
                              info: context,
                              outputByteCount: UInt16(outputByteCount),
                              suiteID: ciphersuite.identifier,
                              kdf: ciphersuite.kdf)
+        #endif
     }
 }
 
