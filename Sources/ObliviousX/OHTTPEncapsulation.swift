@@ -169,7 +169,7 @@ public enum OHTTPEncapsulation {
         public init<EncapsulatedKey: RandomAccessCollection> (
             context: HPKE.Recipient, encapsulatedKey: EncapsulatedKey,  mediaType: String, ciphersuite: HPKE.Ciphersuite
         ) throws where EncapsulatedKey.Element == UInt8 {
-            let secret = try context.exportSecret(context: Array(mediaType.utf8), ciphersuite: ciphersuite, outputByteCount: ciphersuite.aead.keyByteCount)
+            let secret = try context.exportSecret(context: Array(mediaType.utf8), outputByteCount: ciphersuite.aead.keyByteCount)
             let nonceLength = max(ciphersuite.aead.keyByteCount, ciphersuite.aead.nonceByteCount)
             var responseNonce = Data(repeating: 0, count: nonceLength)
             responseNonce.withUnsafeMutableBytes { $0.initializeWithRandomBytes(count: nonceLength) }
@@ -243,7 +243,7 @@ public enum OHTTPEncapsulation {
                     throw CryptoKitError.incorrectParameterSize
                 }
 
-                let secret = try context.exportSecret(context: Array(mediaType.utf8), ciphersuite: ciphersuite, outputByteCount: ciphersuite.aead.keyByteCount)
+                let secret = try context.exportSecret(context: Array(mediaType.utf8), outputByteCount: ciphersuite.aead.keyByteCount)
 
                 var salt = Data(context.encapsulatedKey)
                 salt.append(contentsOf: responseNonce)
@@ -532,38 +532,6 @@ extension HPKE.Ciphersuite {
     }
 }
 
-extension HPKE.Sender {
-    func exportSecret<Context: DataProtocol>(context: Context, ciphersuite: HPKE.Ciphersuite, outputByteCount: Int) throws -> SymmetricKey {
-        #if canImport(Darwin)
-        return try self.exportSecret(context: context, outputByteCount: outputByteCount)
-        #else
-        precondition(outputByteCount > 0)
-        return LabeledExpand(prk: self.exporterSecret,
-                             label: Data("sec".utf8),
-                             info: context,
-                             outputByteCount: UInt16(outputByteCount),
-                             suiteID: ciphersuite.identifier,
-                             kdf: ciphersuite.kdf)
-        #endif
-    }
-}
-
-extension HPKE.Recipient {
-    func exportSecret<Context: DataProtocol>(context: Context, ciphersuite: HPKE.Ciphersuite, outputByteCount: Int) throws -> SymmetricKey {
-        #if canImport(Darwin)
-        return try self.exportSecret(context: context, outputByteCount: outputByteCount)
-        #else
-        precondition(outputByteCount > 0)
-        return LabeledExpand(prk: self.exporterSecret,
-                             label: Data("sec".utf8),
-                             info: context,
-                             outputByteCount: UInt16(outputByteCount),
-                             suiteID: ciphersuite.identifier,
-                             kdf: ciphersuite.kdf)
-        #endif
-    }
-}
-
 extension HPKE.KDF {
     func extract<S: DataProtocol>(salt: S, ikm: SymmetricKey) -> SymmetricKey {
         switch self {
@@ -586,15 +554,6 @@ extension HPKE.KDF {
             return SymmetricKey(data: HKDF<SHA512>.expand(pseudoRandomKey: prk, info: info, outputByteCount: outputByteCount))
         }
     }
-}
-
-internal func LabeledExpand<Info: DataProtocol>(prk: SymmetricKey, label: Data, info: Info, outputByteCount: UInt16, suiteID: Data, kdf: HPKE.KDF) -> SymmetricKey {
-    var labeled_info = I2OSP(value: Int(outputByteCount), outputByteCount: 2)
-    labeled_info.append(protocolLabel)
-    labeled_info.append(suiteID)
-    labeled_info.append(label)
-    labeled_info.append(contentsOf: info)
-    return kdf.expand(prk: prk, info: labeled_info, outputByteCount: Int(outputByteCount))
 }
 
 internal func I2OSP(value: Int, outputByteCount: Int) -> Data {
