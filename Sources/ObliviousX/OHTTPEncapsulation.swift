@@ -45,7 +45,7 @@ public enum OHTTPEncapsulation {
         public mutating func encapsulate<Message: DataProtocol>(content: Message, final: Bool, includeEncapsulationWrapper: Bool = false) throws -> Data {
             // Right now we can't add the encapsulation wrapper because it is broken in the draft spec.
             precondition(includeEncapsulationWrapper == false)
-            return try self.sender.seal(content)
+            return try self.sender.seal(content, authenticating: final ? finalAAD : Data())
         }
     }
 
@@ -118,7 +118,7 @@ public enum OHTTPEncapsulation {
             // Right now we can't add the encapsulation wrapper because it is broken in the draft spec.
             precondition(includeEncapsulationWrapper == false)
 
-            return try self.recipient.open(content)
+            return try self.recipient.open(content, authenticating: final ? finalAAD : Data())
         }
     }
 
@@ -126,7 +126,7 @@ public enum OHTTPEncapsulation {
         context: HPKE.Recipient, encapsulatedKey: EncapsulatedKey,  mediaType: String, ciphersuite: HPKE.Ciphersuite, content: Message
     ) throws -> Data where EncapsulatedKey.Element == UInt8 {
         var streamingResponse = try StreamingResponse(context: context, encapsulatedKey: encapsulatedKey, mediaType: mediaType, ciphersuite: ciphersuite)
-        return try streamingResponse.encapsulate(content, final: true)
+        return try streamingResponse.encapsulate(content, final: false)
     }
 
     public static func decapsulateResponse<ResponsePayload: DataProtocol>(
@@ -135,7 +135,7 @@ public enum OHTTPEncapsulation {
         var streamingDecapsulator = StreamingResponseDecapsulator(mediaType: mediaType, context: context, ciphersuite: ciphersuite)
 
         // Currently this cannot return nil, as it does no internal buffering.
-        return try streamingDecapsulator.decapsulate(responsePayload, final: true)!
+        return try streamingDecapsulator.decapsulate(responsePayload, final: false)!
     }
 
     public struct RequestDecapsulator<Bytes: RandomAccessCollection & DataProtocol> where Bytes.Element == UInt8, Bytes.SubSequence == Bytes {
@@ -150,7 +150,7 @@ public enum OHTTPEncapsulation {
 
         public func decapsulate<PrivateKey: HPKEDiffieHellmanPrivateKey>(mediaType: String, privateKey: PrivateKey) throws -> (Data, HPKE.Recipient) {
             var decapsulator = try StreamingRequestDecapsulator(requestHeader: self.header, mediaType: mediaType, privateKey: privateKey)
-            let decrypted = try decapsulator.decapsulate(content: self.message, final: true)
+            let decrypted = try decapsulator.decapsulate(content: self.message, final: false)
             return (decrypted, decapsulator.recipient)
         }
     }
@@ -198,7 +198,7 @@ public enum OHTTPEncapsulation {
                 self.aeadNonce.xor(with: counter)
             }
 
-            let ct = try self.aead.seal(message, authenticating: Data(), nonce: self.aeadNonce, using: self.aeadKey)
+            let ct = try self.aead.seal(message, authenticating: final ? finalAAD : Data(), nonce: self.aeadNonce, using: self.aeadKey)
 
             // This defer is here to avoid us doing it if we throw above.
             defer {
@@ -268,7 +268,7 @@ public enum OHTTPEncapsulation {
             }
 
             aeadNonce.xor(with: counter)
-            return try aead.open(ciphertext, nonce: aeadNonce, authenticating: Data(), using: aeadKey)
+            return try aead.open(ciphertext, nonce: aeadNonce, authenticating: final ? finalAAD : Data(), using: aeadKey)
         }
     }
 
@@ -606,3 +606,4 @@ extension Data {
     }
 }
 
+private let finalAAD = Data("final".utf8)
