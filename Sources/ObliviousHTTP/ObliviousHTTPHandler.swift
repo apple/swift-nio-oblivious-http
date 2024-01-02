@@ -15,8 +15,8 @@ import NIOCore
 import NIOHTTP1
 
 final class ObliviousHTTPHandler: ChannelDuplexHandler {
-    typealias InboundIn = HTTPServerRequestPart
-    typealias InboundOut = HTTPServerRequestPart
-    typealias OutboundIn = HTTPServerResponsePart
-    typealias OutboundOut = HTTPServerResponsePart
+  typealias InboundIn = HTTPServerRequestPart
+  typealias InboundOut = HTTPServerRequestPart
+  typealias OutboundIn = HTTPServerResponsePart
+  typealias OutboundOut = HTTPServerResponsePart
 }

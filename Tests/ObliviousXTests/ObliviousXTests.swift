@@ -1,3 +1,4 @@
+import Crypto
 //===----------------------------------------------------------------------===//
 //
 // This source file is part of the SwiftNIO open source project
@@ -12,410 +13,444 @@
 //
 //===----------------------------------------------------------------------===//
 import Foundation
-import XCTest
 import ObliviousX
-import Crypto
+import XCTest
 
 final class ObliviousXTests: XCTestCase {
-    func testObliviousStringRoundTrip() throws {
-        let request = "Hello world!"
-        let response = "Hello from ObliviousX"
-        let mediaType = "text/plain"
+  func testObliviousStringRoundTrip() throws {
+    let request = "Hello world!"
+    let response = "Hello from ObliviousX"
+    let mediaType = "text/plain"
 
-        let serverKey = P256.KeyAgreement.PrivateKey()
+    let serverKey = P256.KeyAgreement.PrivateKey()
 
-        let (encapsulated, sender) = try OHTTPEncapsulation.encapsulateRequest(
-            keyID: 66,
-            publicKey: serverKey.publicKey,
-            ciphersuite: .P256_SHA256_AES_GCM_256,
-            mediaType: mediaType,
-            content: Data(request.utf8)
-        )
-        let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(encapsulatedRequest: encapsulated)!
-        XCTAssertEqual(parsed.keyID, 66)
-        XCTAssertEqual(parsed.kem, .P256_HKDF_SHA256)
-        XCTAssertEqual(parsed.kdf, .HKDF_SHA256)
-        XCTAssertEqual(parsed.aead, .AES_GCM_256)
+    let (encapsulated, sender) = try OHTTPEncapsulation.encapsulateRequest(
+      keyID: 66,
+      publicKey: serverKey.publicKey,
+      ciphersuite: .P256_SHA256_AES_GCM_256,
+      mediaType: mediaType,
+      content: Data(request.utf8)
+    )
+    let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(
+      encapsulatedRequest: encapsulated)!
+    XCTAssertEqual(parsed.keyID, 66)
+    XCTAssertEqual(parsed.kem, .P256_HKDF_SHA256)
+    XCTAssertEqual(parsed.kdf, .HKDF_SHA256)
+    XCTAssertEqual(parsed.aead, .AES_GCM_256)
 
-        let decapsulator = OHTTPEncapsulation.RequestDecapsulator(requestHeader: parsed, message: encapsulated.dropFirst(consumedBytes))
-        let (deEncapsulated, context) = try decapsulator.decapsulate(mediaType: mediaType, privateKey: serverKey)
-        XCTAssertEqual(String(decoding: deEncapsulated, as: UTF8.self), request)
+    let decapsulator = OHTTPEncapsulation.RequestDecapsulator(
+      requestHeader: parsed, message: encapsulated.dropFirst(consumedBytes))
+    let (deEncapsulated, context) = try decapsulator.decapsulate(
+      mediaType: mediaType, privateKey: serverKey)
+    XCTAssertEqual(String(decoding: deEncapsulated, as: UTF8.self), request)
 
-        let encapsulatedResponse = try OHTTPEncapsulation.encapsulateResponse(
-            context: context,
-            encapsulatedKey: parsed.encapsulatedKey,
-            mediaType: mediaType,
-            ciphersuite: .P256_SHA256_AES_GCM_256,
-            content: Data(response.utf8)
-        )
+    let encapsulatedResponse = try OHTTPEncapsulation.encapsulateResponse(
+      context: context,
+      encapsulatedKey: parsed.encapsulatedKey,
+      mediaType: mediaType,
+      ciphersuite: .P256_SHA256_AES_GCM_256,
+      content: Data(response.utf8)
+    )
 
-        let decapsulatedResponse = try OHTTPEncapsulation.decapsulateResponse(
-            responsePayload: encapsulatedResponse, mediaType: mediaType, context: sender, ciphersuite: .P256_SHA256_AES_GCM_256
-        )
-        XCTAssertEqual(String(decoding: decapsulatedResponse, as: UTF8.self), response)
+    let decapsulatedResponse = try OHTTPEncapsulation.decapsulateResponse(
+      responsePayload: encapsulatedResponse, mediaType: mediaType, context: sender,
+      ciphersuite: .P256_SHA256_AES_GCM_256
+    )
+    XCTAssertEqual(String(decoding: decapsulatedResponse, as: UTF8.self), response)
+  }
+
+  func testSimpleStreamingHappyPath() throws {
+    let request = "Counter"
+    let mediaType = "text/plain"
+
+    let serverKey = P256.KeyAgreement.PrivateKey()
+
+    let (encapsulated, sender) = try OHTTPEncapsulation.encapsulateRequest(
+      keyID: 66,
+      publicKey: serverKey.publicKey,
+      ciphersuite: .P256_SHA256_AES_GCM_256,
+      mediaType: mediaType,
+      content: Data(request.utf8)
+    )
+    let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(
+      encapsulatedRequest: encapsulated)!
+    XCTAssertEqual(parsed.keyID, 66)
+    XCTAssertEqual(parsed.kem, .P256_HKDF_SHA256)
+    XCTAssertEqual(parsed.kdf, .HKDF_SHA256)
+    XCTAssertEqual(parsed.aead, .AES_GCM_256)
+
+    let decapsulator = OHTTPEncapsulation.RequestDecapsulator(
+      requestHeader: parsed, message: encapsulated.dropFirst(consumedBytes))
+    let (deEncapsulated, context) = try decapsulator.decapsulate(
+      mediaType: mediaType, privateKey: serverKey)
+    XCTAssertEqual(String(decoding: deEncapsulated, as: UTF8.self), request)
+
+    var responseEncapsulator = try OHTTPEncapsulation.StreamingResponse(
+      context: context,
+      encapsulatedKey: parsed.encapsulatedKey,
+      mediaType: mediaType,
+      ciphersuite: .P256_SHA256_AES_GCM_256
+    )
+    var responseDecapsulator = OHTTPEncapsulation.StreamingResponseDecapsulator(
+      mediaType: mediaType, context: sender, ciphersuite: .P256_SHA256_AES_GCM_256
+    )
+
+    for count in 1...12 {
+      let message = "At the sound of the bell, the time will be \(count) PM."
+      let encapsulated = try responseEncapsulator.encapsulate(
+        Data(message.utf8), final: count == 12)
+      let decapsulated = try responseDecapsulator.decapsulate(encapsulated, final: count == 12)!
+      XCTAssertEqual(String(decoding: decapsulated, as: UTF8.self), message)
+    }
+  }
+
+  func testStreamingIsOrderDependent() throws {
+    let request = "Counter"
+    let mediaType = "text/plain"
+
+    let serverKey = P256.KeyAgreement.PrivateKey()
+
+    let (encapsulated, sender) = try OHTTPEncapsulation.encapsulateRequest(
+      keyID: 66,
+      publicKey: serverKey.publicKey,
+      ciphersuite: .P256_SHA256_AES_GCM_256,
+      mediaType: mediaType,
+      content: Data(request.utf8)
+    )
+    let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(
+      encapsulatedRequest: encapsulated)!
+    XCTAssertEqual(parsed.keyID, 66)
+    XCTAssertEqual(parsed.kem, .P256_HKDF_SHA256)
+    XCTAssertEqual(parsed.kdf, .HKDF_SHA256)
+    XCTAssertEqual(parsed.aead, .AES_GCM_256)
+
+    let decapsulator = OHTTPEncapsulation.RequestDecapsulator(
+      requestHeader: parsed, message: encapsulated.dropFirst(consumedBytes))
+    let (deEncapsulated, context) = try decapsulator.decapsulate(
+      mediaType: mediaType, privateKey: serverKey)
+    XCTAssertEqual(String(decoding: deEncapsulated, as: UTF8.self), request)
+
+    var responseEncapsulator = try OHTTPEncapsulation.StreamingResponse(
+      context: context,
+      encapsulatedKey: parsed.encapsulatedKey,
+      mediaType: mediaType,
+      ciphersuite: .P256_SHA256_AES_GCM_256
+    )
+    var responseDecapsulator = OHTTPEncapsulation.StreamingResponseDecapsulator(
+      mediaType: mediaType, context: sender, ciphersuite: .P256_SHA256_AES_GCM_256
+    )
+
+    let encapsulatedMessages: [Data] = try (1...2).map { count in
+      let message = "At the sound of the bell, the time will be \(count) PM."
+      return try responseEncapsulator.encapsulate(Data(message.utf8), final: false)
     }
 
-    func testSimpleStreamingHappyPath() throws {
-        let request = "Counter"
-        let mediaType = "text/plain"
+    // Try to decrypt the second message first. It won't work!
+    XCTAssertThrowsError(
+      try responseDecapsulator.decapsulate(encapsulatedMessages.last!, final: false))
+  }
 
-        let serverKey = P256.KeyAgreement.PrivateKey()
+  func testStreamingRequestIsOrderDependent() throws {
+    let messages: [Data] = (1...12).map { count in
+      Data("At the sound of the bell, the time will be \(count) PM.".utf8)
+    }
+    let mediaType = "text/plain"
 
-        let (encapsulated, sender) = try OHTTPEncapsulation.encapsulateRequest(
-            keyID: 66,
-            publicKey: serverKey.publicKey,
-            ciphersuite: .P256_SHA256_AES_GCM_256,
-            mediaType: mediaType,
-            content: Data(request.utf8)
-        )
-        let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(encapsulatedRequest: encapsulated)!
-        XCTAssertEqual(parsed.keyID, 66)
-        XCTAssertEqual(parsed.kem, .P256_HKDF_SHA256)
-        XCTAssertEqual(parsed.kdf, .HKDF_SHA256)
-        XCTAssertEqual(parsed.aead, .AES_GCM_256)
+    let serverKey = P256.KeyAgreement.PrivateKey()
 
-        let decapsulator = OHTTPEncapsulation.RequestDecapsulator(requestHeader: parsed, message: encapsulated.dropFirst(consumedBytes))
-        let (deEncapsulated, context) = try decapsulator.decapsulate(mediaType: mediaType, privateKey: serverKey)
-        XCTAssertEqual(String(decoding: deEncapsulated, as: UTF8.self), request)
+    var encapsulator = try OHTTPEncapsulation.StreamingRequest(
+      keyID: 66,
+      publicKey: serverKey.publicKey,
+      ciphersuite: .P256_SHA256_AES_GCM_256,
+      mediaType: mediaType
+    )
 
-        var responseEncapsulator = try OHTTPEncapsulation.StreamingResponse(
-            context: context,
-            encapsulatedKey: parsed.encapsulatedKey,
-            mediaType: mediaType,
-            ciphersuite: .P256_SHA256_AES_GCM_256
-        )
-        var responseDecapsulator = OHTTPEncapsulation.StreamingResponseDecapsulator(
-            mediaType: mediaType, context: sender, ciphersuite: .P256_SHA256_AES_GCM_256
-        )
-
-        for count in 1...12 {
-            let message = "At the sound of the bell, the time will be \(count) PM."
-            let encapsulated = try responseEncapsulator.encapsulate(Data(message.utf8), final: count == 12)
-            let decapsulated = try responseDecapsulator.decapsulate(encapsulated, final: count == 12)!
-            XCTAssertEqual(String(decoding: decapsulated, as: UTF8.self), message)
-        }
+    let encapsulatedMessages = try messages.map {
+      try encapsulator.encapsulate(content: $0, final: false)
     }
 
-    func testStreamingIsOrderDependent() throws {
-        let request = "Counter"
-        let mediaType = "text/plain"
+    let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(
+      encapsulatedRequest: encapsulator.header)!
+    XCTAssertEqual(parsed.keyID, 66)
+    XCTAssertEqual(parsed.kem, .P256_HKDF_SHA256)
+    XCTAssertEqual(parsed.kdf, .HKDF_SHA256)
+    XCTAssertEqual(parsed.aead, .AES_GCM_256)
+    XCTAssertEqual(consumedBytes, encapsulator.header.count)
 
-        let serverKey = P256.KeyAgreement.PrivateKey()
+    var decapsulator = try OHTTPEncapsulation.StreamingRequestDecapsulator(
+      requestHeader: parsed, mediaType: mediaType, privateKey: serverKey)
 
-        let (encapsulated, sender) = try OHTTPEncapsulation.encapsulateRequest(
-            keyID: 66,
-            publicKey: serverKey.publicKey,
-            ciphersuite: .P256_SHA256_AES_GCM_256,
-            mediaType: mediaType,
-            content: Data(request.utf8)
-        )
-        let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(encapsulatedRequest: encapsulated)!
-        XCTAssertEqual(parsed.keyID, 66)
-        XCTAssertEqual(parsed.kem, .P256_HKDF_SHA256)
-        XCTAssertEqual(parsed.kdf, .HKDF_SHA256)
-        XCTAssertEqual(parsed.aead, .AES_GCM_256)
-
-        let decapsulator = OHTTPEncapsulation.RequestDecapsulator(requestHeader: parsed, message: encapsulated.dropFirst(consumedBytes))
-        let (deEncapsulated, context) = try decapsulator.decapsulate(mediaType: mediaType, privateKey: serverKey)
-        XCTAssertEqual(String(decoding: deEncapsulated, as: UTF8.self), request)
-
-        var responseEncapsulator = try OHTTPEncapsulation.StreamingResponse(
-            context: context,
-            encapsulatedKey: parsed.encapsulatedKey,
-            mediaType: mediaType,
-            ciphersuite: .P256_SHA256_AES_GCM_256
-        )
-        var responseDecapsulator = OHTTPEncapsulation.StreamingResponseDecapsulator(
-            mediaType: mediaType, context: sender, ciphersuite: .P256_SHA256_AES_GCM_256
-        )
-
-        let encapsulatedMessages: [Data] = try (1...2).map { count in
-            let message = "At the sound of the bell, the time will be \(count) PM."
-            return try responseEncapsulator.encapsulate(Data(message.utf8), final: false)
-        }
-
-        // Try to decrypt the second message first. It won't work!
-        XCTAssertThrowsError(try responseDecapsulator.decapsulate(encapsulatedMessages.last!, final: false))
+    let decapsulated: [Data] = try encapsulatedMessages.map { message in
+      try decapsulator.decapsulate(content: message, final: false)
     }
 
-    func testStreamingRequestIsOrderDependent() throws {
-        let messages: [Data] = (1...12).map { count in
-            Data("At the sound of the bell, the time will be \(count) PM.".utf8)
-        }
-        let mediaType = "text/plain"
+    XCTAssertEqual(messages, decapsulated)
+  }
 
-        let serverKey = P256.KeyAgreement.PrivateKey()
+  func testAgreeingOnFinalityWorks_request() throws {
+    let messages: [Data] = (1...12).map { count in
+      Data("At the sound of the bell, the time will be \(count) PM.".utf8)
+    }
+    let mediaType = "text/plain"
 
-        var encapsulator = try OHTTPEncapsulation.StreamingRequest(
-            keyID: 66,
-            publicKey: serverKey.publicKey,
-            ciphersuite: .P256_SHA256_AES_GCM_256,
-            mediaType: mediaType
-        )
+    let serverKey = P256.KeyAgreement.PrivateKey()
 
-        let encapsulatedMessages = try messages.map {
-            try encapsulator.encapsulate(content: $0, final: false)
-        }
+    var encapsulator = try OHTTPEncapsulation.StreamingRequest(
+      keyID: 66,
+      publicKey: serverKey.publicKey,
+      ciphersuite: .P256_SHA256_AES_GCM_256,
+      mediaType: mediaType
+    )
 
-        let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(encapsulatedRequest: encapsulator.header)!
-        XCTAssertEqual(parsed.keyID, 66)
-        XCTAssertEqual(parsed.kem, .P256_HKDF_SHA256)
-        XCTAssertEqual(parsed.kdf, .HKDF_SHA256)
-        XCTAssertEqual(parsed.aead, .AES_GCM_256)
-        XCTAssertEqual(consumedBytes, encapsulator.header.count)
+    var encapsulatedMessages = try messages.dropLast().map {
+      try encapsulator.encapsulate(content: $0, final: false)
+    }
+    encapsulatedMessages.append(try encapsulator.encapsulate(content: messages.last!, final: true))
 
-        var decapsulator = try OHTTPEncapsulation.StreamingRequestDecapsulator(requestHeader: parsed, mediaType: mediaType, privateKey: serverKey)
+    let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(
+      encapsulatedRequest: encapsulator.header)!
+    XCTAssertEqual(parsed.keyID, 66)
+    XCTAssertEqual(parsed.kem, .P256_HKDF_SHA256)
+    XCTAssertEqual(parsed.kdf, .HKDF_SHA256)
+    XCTAssertEqual(parsed.aead, .AES_GCM_256)
+    XCTAssertEqual(consumedBytes, encapsulator.header.count)
 
-        let decapsulated: [Data] = try encapsulatedMessages.map { message in
-            try decapsulator.decapsulate(content: message, final: false)
-        }
+    var decapsulator = try OHTTPEncapsulation.StreamingRequestDecapsulator(
+      requestHeader: parsed, mediaType: mediaType, privateKey: serverKey)
 
-        XCTAssertEqual(messages, decapsulated)
+    var decapsulated: [Data] = try encapsulatedMessages.dropLast().map { message in
+      try decapsulator.decapsulate(content: message, final: false)
+    }
+    decapsulated.append(
+      try decapsulator.decapsulate(content: encapsulatedMessages.last!, final: true))
+
+    XCTAssertEqual(messages, decapsulated)
+  }
+
+  func testAgreeingOnFinalityWorks_response() throws {
+    let request = "Counter"
+    let mediaType = "text/plain"
+
+    let serverKey = P256.KeyAgreement.PrivateKey()
+
+    let (encapsulated, sender) = try OHTTPEncapsulation.encapsulateRequest(
+      keyID: 66,
+      publicKey: serverKey.publicKey,
+      ciphersuite: .P256_SHA256_AES_GCM_256,
+      mediaType: mediaType,
+      content: Data(request.utf8)
+    )
+    let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(
+      encapsulatedRequest: encapsulated)!
+
+    let decapsulator = OHTTPEncapsulation.RequestDecapsulator(
+      requestHeader: parsed, message: encapsulated.dropFirst(consumedBytes))
+    let (deEncapsulated, context) = try decapsulator.decapsulate(
+      mediaType: mediaType, privateKey: serverKey)
+    XCTAssertEqual(String(decoding: deEncapsulated, as: UTF8.self), request)
+
+    var responseEncapsulator = try OHTTPEncapsulation.StreamingResponse(
+      context: context,
+      encapsulatedKey: parsed.encapsulatedKey,
+      mediaType: mediaType,
+      ciphersuite: .P256_SHA256_AES_GCM_256
+    )
+    var responseDecapsulator = OHTTPEncapsulation.StreamingResponseDecapsulator(
+      mediaType: mediaType, context: sender, ciphersuite: .P256_SHA256_AES_GCM_256
+    )
+
+    let messages: [Data] = (1...12).map { count in
+      Data("At the sound of the bell, the time will be \(count) PM.".utf8)
+    }
+    var encapsulatedMessages: [Data] = try messages.dropLast().map { message in
+      return try responseEncapsulator.encapsulate(message, final: false)
+    }
+    encapsulatedMessages.append(try responseEncapsulator.encapsulate(messages.last!, final: true))
+
+    var decapsulated: [Data] = try encapsulatedMessages.dropLast().map { message in
+      try responseDecapsulator.decapsulate(message, final: false)!
+    }
+    decapsulated.append(
+      try responseDecapsulator.decapsulate(encapsulatedMessages.last!, final: true)!)
+
+    XCTAssertEqual(messages, decapsulated)
+  }
+
+  func testDisagreeingOnFinalityIsAnError_request_recipientMissing() throws {
+    let messages: [Data] = (1...12).map { count in
+      Data("At the sound of the bell, the time will be \(count) PM.".utf8)
+    }
+    let mediaType = "text/plain"
+
+    let serverKey = P256.KeyAgreement.PrivateKey()
+
+    var encapsulator = try OHTTPEncapsulation.StreamingRequest(
+      keyID: 66,
+      publicKey: serverKey.publicKey,
+      ciphersuite: .P256_SHA256_AES_GCM_256,
+      mediaType: mediaType
+    )
+
+    var encapsulatedMessages = try messages.dropLast().map {
+      try encapsulator.encapsulate(content: $0, final: false)
+    }
+    encapsulatedMessages.append(try encapsulator.encapsulate(content: messages.last!, final: true))
+
+    let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(
+      encapsulatedRequest: encapsulator.header)!
+    XCTAssertEqual(parsed.keyID, 66)
+    XCTAssertEqual(parsed.kem, .P256_HKDF_SHA256)
+    XCTAssertEqual(parsed.kdf, .HKDF_SHA256)
+    XCTAssertEqual(parsed.aead, .AES_GCM_256)
+    XCTAssertEqual(consumedBytes, encapsulator.header.count)
+
+    var decapsulator = try OHTTPEncapsulation.StreamingRequestDecapsulator(
+      requestHeader: parsed, mediaType: mediaType, privateKey: serverKey)
+
+    let decapsulated: [Data] = try encapsulatedMessages.dropLast().map { message in
+      try decapsulator.decapsulate(content: message, final: false)
     }
 
-    func testAgreeingOnFinalityWorks_request() throws {
-        let messages: [Data] = (1...12).map { count in
-            Data("At the sound of the bell, the time will be \(count) PM.".utf8)
-        }
-        let mediaType = "text/plain"
+    XCTAssertEqual(messages.dropLast(), decapsulated)
 
-        let serverKey = P256.KeyAgreement.PrivateKey()
+    XCTAssertThrowsError(
+      try decapsulator.decapsulate(content: encapsulatedMessages.last!, final: false))
+  }
 
-        var encapsulator = try OHTTPEncapsulation.StreamingRequest(
-            keyID: 66,
-            publicKey: serverKey.publicKey,
-            ciphersuite: .P256_SHA256_AES_GCM_256,
-            mediaType: mediaType
-        )
+  func testDisagreeingOnFinalityIsAnError_request_senderMissing() throws {
+    let messages: [Data] = (1...12).map { count in
+      Data("At the sound of the bell, the time will be \(count) PM.".utf8)
+    }
+    let mediaType = "text/plain"
 
-        var encapsulatedMessages = try messages.dropLast().map {
-            try encapsulator.encapsulate(content: $0, final: false)
-        }
-        encapsulatedMessages.append(try encapsulator.encapsulate(content: messages.last!, final: true))
+    let serverKey = P256.KeyAgreement.PrivateKey()
 
-        let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(encapsulatedRequest: encapsulator.header)!
-        XCTAssertEqual(parsed.keyID, 66)
-        XCTAssertEqual(parsed.kem, .P256_HKDF_SHA256)
-        XCTAssertEqual(parsed.kdf, .HKDF_SHA256)
-        XCTAssertEqual(parsed.aead, .AES_GCM_256)
-        XCTAssertEqual(consumedBytes, encapsulator.header.count)
+    var encapsulator = try OHTTPEncapsulation.StreamingRequest(
+      keyID: 66,
+      publicKey: serverKey.publicKey,
+      ciphersuite: .P256_SHA256_AES_GCM_256,
+      mediaType: mediaType
+    )
 
-        var decapsulator = try OHTTPEncapsulation.StreamingRequestDecapsulator(requestHeader: parsed, mediaType: mediaType, privateKey: serverKey)
-
-        var decapsulated: [Data] = try encapsulatedMessages.dropLast().map { message in
-            try decapsulator.decapsulate(content: message, final: false)
-        }
-        decapsulated.append(try decapsulator.decapsulate(content: encapsulatedMessages.last!, final: true))
-
-        XCTAssertEqual(messages, decapsulated)
+    let encapsulatedMessages = try messages.map {
+      try encapsulator.encapsulate(content: $0, final: false)
     }
 
-    func testAgreeingOnFinalityWorks_response() throws {
-        let request = "Counter"
-        let mediaType = "text/plain"
+    let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(
+      encapsulatedRequest: encapsulator.header)!
+    XCTAssertEqual(parsed.keyID, 66)
+    XCTAssertEqual(parsed.kem, .P256_HKDF_SHA256)
+    XCTAssertEqual(parsed.kdf, .HKDF_SHA256)
+    XCTAssertEqual(parsed.aead, .AES_GCM_256)
+    XCTAssertEqual(consumedBytes, encapsulator.header.count)
 
-        let serverKey = P256.KeyAgreement.PrivateKey()
+    var decapsulator = try OHTTPEncapsulation.StreamingRequestDecapsulator(
+      requestHeader: parsed, mediaType: mediaType, privateKey: serverKey)
 
-        let (encapsulated, sender) = try OHTTPEncapsulation.encapsulateRequest(
-            keyID: 66,
-            publicKey: serverKey.publicKey,
-            ciphersuite: .P256_SHA256_AES_GCM_256,
-            mediaType: mediaType,
-            content: Data(request.utf8)
-        )
-        let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(encapsulatedRequest: encapsulated)!
-
-        let decapsulator = OHTTPEncapsulation.RequestDecapsulator(requestHeader: parsed, message: encapsulated.dropFirst(consumedBytes))
-        let (deEncapsulated, context) = try decapsulator.decapsulate(mediaType: mediaType, privateKey: serverKey)
-        XCTAssertEqual(String(decoding: deEncapsulated, as: UTF8.self), request)
-
-        var responseEncapsulator = try OHTTPEncapsulation.StreamingResponse(
-            context: context,
-            encapsulatedKey: parsed.encapsulatedKey,
-            mediaType: mediaType,
-            ciphersuite: .P256_SHA256_AES_GCM_256
-        )
-        var responseDecapsulator = OHTTPEncapsulation.StreamingResponseDecapsulator(
-            mediaType: mediaType, context: sender, ciphersuite: .P256_SHA256_AES_GCM_256
-        )
-
-        let messages: [Data] = (1...12).map { count in
-            Data("At the sound of the bell, the time will be \(count) PM.".utf8)
-        }
-        var encapsulatedMessages: [Data] = try messages.dropLast().map { message in
-            return try responseEncapsulator.encapsulate(message, final: false)
-        }
-        encapsulatedMessages.append(try responseEncapsulator.encapsulate(messages.last!, final: true))
-
-        var decapsulated: [Data] = try encapsulatedMessages.dropLast().map { message in
-            try responseDecapsulator.decapsulate(message, final: false)!
-        }
-        decapsulated.append(try responseDecapsulator.decapsulate(encapsulatedMessages.last!, final: true)!)
-
-        XCTAssertEqual(messages, decapsulated)
+    let decapsulated: [Data] = try encapsulatedMessages.dropLast().map { message in
+      try decapsulator.decapsulate(content: message, final: false)
     }
 
-    func testDisagreeingOnFinalityIsAnError_request_recipientMissing() throws {
-        let messages: [Data] = (1...12).map { count in
-            Data("At the sound of the bell, the time will be \(count) PM.".utf8)
-        }
-        let mediaType = "text/plain"
+    XCTAssertEqual(messages.dropLast(), decapsulated)
 
-        let serverKey = P256.KeyAgreement.PrivateKey()
+    XCTAssertThrowsError(
+      try decapsulator.decapsulate(content: encapsulatedMessages.last!, final: true))
+  }
 
-        var encapsulator = try OHTTPEncapsulation.StreamingRequest(
-            keyID: 66,
-            publicKey: serverKey.publicKey,
-            ciphersuite: .P256_SHA256_AES_GCM_256,
-            mediaType: mediaType
-        )
+  func testDisagreeingOnFinalityIsAnError_response_recipientMissing() throws {
+    let request = "Counter"
+    let mediaType = "text/plain"
 
-        var encapsulatedMessages = try messages.dropLast().map {
-            try encapsulator.encapsulate(content: $0, final: false)
-        }
-        encapsulatedMessages.append(try encapsulator.encapsulate(content: messages.last!, final: true))
+    let serverKey = P256.KeyAgreement.PrivateKey()
 
-        let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(encapsulatedRequest: encapsulator.header)!
-        XCTAssertEqual(parsed.keyID, 66)
-        XCTAssertEqual(parsed.kem, .P256_HKDF_SHA256)
-        XCTAssertEqual(parsed.kdf, .HKDF_SHA256)
-        XCTAssertEqual(parsed.aead, .AES_GCM_256)
-        XCTAssertEqual(consumedBytes, encapsulator.header.count)
+    let (encapsulated, sender) = try OHTTPEncapsulation.encapsulateRequest(
+      keyID: 66,
+      publicKey: serverKey.publicKey,
+      ciphersuite: .P256_SHA256_AES_GCM_256,
+      mediaType: mediaType,
+      content: Data(request.utf8)
+    )
+    let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(
+      encapsulatedRequest: encapsulated)!
 
-        var decapsulator = try OHTTPEncapsulation.StreamingRequestDecapsulator(requestHeader: parsed, mediaType: mediaType, privateKey: serverKey)
+    let decapsulator = OHTTPEncapsulation.RequestDecapsulator(
+      requestHeader: parsed, message: encapsulated.dropFirst(consumedBytes))
+    let (deEncapsulated, context) = try decapsulator.decapsulate(
+      mediaType: mediaType, privateKey: serverKey)
+    XCTAssertEqual(String(decoding: deEncapsulated, as: UTF8.self), request)
 
-        let decapsulated: [Data] = try encapsulatedMessages.dropLast().map { message in
-            try decapsulator.decapsulate(content: message, final: false)
-        }
+    var responseEncapsulator = try OHTTPEncapsulation.StreamingResponse(
+      context: context,
+      encapsulatedKey: parsed.encapsulatedKey,
+      mediaType: mediaType,
+      ciphersuite: .P256_SHA256_AES_GCM_256
+    )
+    var responseDecapsulator = OHTTPEncapsulation.StreamingResponseDecapsulator(
+      mediaType: mediaType, context: sender, ciphersuite: .P256_SHA256_AES_GCM_256
+    )
 
-        XCTAssertEqual(messages.dropLast(), decapsulated)
+    let messages: [Data] = (1...12).map { count in
+      Data("At the sound of the bell, the time will be \(count) PM.".utf8)
+    }
+    var encapsulatedMessages: [Data] = try messages.dropLast().map { message in
+      return try responseEncapsulator.encapsulate(message, final: false)
+    }
+    encapsulatedMessages.append(try responseEncapsulator.encapsulate(messages.last!, final: true))
 
-        XCTAssertThrowsError(try decapsulator.decapsulate(content: encapsulatedMessages.last!, final: false))
+    let decapsulated: [Data] = try encapsulatedMessages.dropLast().map { message in
+      try responseDecapsulator.decapsulate(message, final: false)!
     }
 
-    func testDisagreeingOnFinalityIsAnError_request_senderMissing() throws {
-        let messages: [Data] = (1...12).map { count in
-            Data("At the sound of the bell, the time will be \(count) PM.".utf8)
-        }
-        let mediaType = "text/plain"
+    XCTAssertEqual(messages.dropLast(), decapsulated)
+    XCTAssertThrowsError(
+      try responseDecapsulator.decapsulate(encapsulatedMessages.last!, final: false))
+  }
 
-        let serverKey = P256.KeyAgreement.PrivateKey()
+  func testDisagreeingOnFinalityIsAnError_response_senderMissing() throws {
+    let request = "Counter"
+    let mediaType = "text/plain"
 
-        var encapsulator = try OHTTPEncapsulation.StreamingRequest(
-            keyID: 66,
-            publicKey: serverKey.publicKey,
-            ciphersuite: .P256_SHA256_AES_GCM_256,
-            mediaType: mediaType
-        )
+    let serverKey = P256.KeyAgreement.PrivateKey()
 
-        let encapsulatedMessages = try messages.map {
-            try encapsulator.encapsulate(content: $0, final: false)
-        }
+    let (encapsulated, sender) = try OHTTPEncapsulation.encapsulateRequest(
+      keyID: 66,
+      publicKey: serverKey.publicKey,
+      ciphersuite: .P256_SHA256_AES_GCM_256,
+      mediaType: mediaType,
+      content: Data(request.utf8)
+    )
+    let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(
+      encapsulatedRequest: encapsulated)!
 
-        let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(encapsulatedRequest: encapsulator.header)!
-        XCTAssertEqual(parsed.keyID, 66)
-        XCTAssertEqual(parsed.kem, .P256_HKDF_SHA256)
-        XCTAssertEqual(parsed.kdf, .HKDF_SHA256)
-        XCTAssertEqual(parsed.aead, .AES_GCM_256)
-        XCTAssertEqual(consumedBytes, encapsulator.header.count)
+    let decapsulator = OHTTPEncapsulation.RequestDecapsulator(
+      requestHeader: parsed, message: encapsulated.dropFirst(consumedBytes))
+    let (deEncapsulated, context) = try decapsulator.decapsulate(
+      mediaType: mediaType, privateKey: serverKey)
+    XCTAssertEqual(String(decoding: deEncapsulated, as: UTF8.self), request)
 
-        var decapsulator = try OHTTPEncapsulation.StreamingRequestDecapsulator(requestHeader: parsed, mediaType: mediaType, privateKey: serverKey)
+    var responseEncapsulator = try OHTTPEncapsulation.StreamingResponse(
+      context: context,
+      encapsulatedKey: parsed.encapsulatedKey,
+      mediaType: mediaType,
+      ciphersuite: .P256_SHA256_AES_GCM_256
+    )
+    var responseDecapsulator = OHTTPEncapsulation.StreamingResponseDecapsulator(
+      mediaType: mediaType, context: sender, ciphersuite: .P256_SHA256_AES_GCM_256
+    )
 
-        let decapsulated: [Data] = try encapsulatedMessages.dropLast().map { message in
-            try decapsulator.decapsulate(content: message, final: false)
-        }
-
-        XCTAssertEqual(messages.dropLast(), decapsulated)
-
-        XCTAssertThrowsError(try decapsulator.decapsulate(content: encapsulatedMessages.last!, final: true))
+    let messages: [Data] = (1...12).map { count in
+      Data("At the sound of the bell, the time will be \(count) PM.".utf8)
+    }
+    let encapsulatedMessages: [Data] = try messages.map { message in
+      return try responseEncapsulator.encapsulate(message, final: false)
     }
 
-    func testDisagreeingOnFinalityIsAnError_response_recipientMissing() throws {
-        let request = "Counter"
-        let mediaType = "text/plain"
-
-        let serverKey = P256.KeyAgreement.PrivateKey()
-
-        let (encapsulated, sender) = try OHTTPEncapsulation.encapsulateRequest(
-            keyID: 66,
-            publicKey: serverKey.publicKey,
-            ciphersuite: .P256_SHA256_AES_GCM_256,
-            mediaType: mediaType,
-            content: Data(request.utf8)
-        )
-        let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(encapsulatedRequest: encapsulated)!
-
-        let decapsulator = OHTTPEncapsulation.RequestDecapsulator(requestHeader: parsed, message: encapsulated.dropFirst(consumedBytes))
-        let (deEncapsulated, context) = try decapsulator.decapsulate(mediaType: mediaType, privateKey: serverKey)
-        XCTAssertEqual(String(decoding: deEncapsulated, as: UTF8.self), request)
-
-        var responseEncapsulator = try OHTTPEncapsulation.StreamingResponse(
-            context: context,
-            encapsulatedKey: parsed.encapsulatedKey,
-            mediaType: mediaType,
-            ciphersuite: .P256_SHA256_AES_GCM_256
-        )
-        var responseDecapsulator = OHTTPEncapsulation.StreamingResponseDecapsulator(
-            mediaType: mediaType, context: sender, ciphersuite: .P256_SHA256_AES_GCM_256
-        )
-
-        let messages: [Data] = (1...12).map { count in
-            Data("At the sound of the bell, the time will be \(count) PM.".utf8)
-        }
-        var encapsulatedMessages: [Data] = try messages.dropLast().map { message in
-            return try responseEncapsulator.encapsulate(message, final: false)
-        }
-        encapsulatedMessages.append(try responseEncapsulator.encapsulate(messages.last!, final: true))
-
-        let decapsulated: [Data] = try encapsulatedMessages.dropLast().map { message in
-            try responseDecapsulator.decapsulate(message, final: false)!
-        }
-
-        XCTAssertEqual(messages.dropLast(), decapsulated)
-        XCTAssertThrowsError(try responseDecapsulator.decapsulate(encapsulatedMessages.last!, final: false))
+    let decapsulated: [Data] = try encapsulatedMessages.dropLast().map { message in
+      try responseDecapsulator.decapsulate(message, final: false)!
     }
 
-    func testDisagreeingOnFinalityIsAnError_response_senderMissing() throws {
-        let request = "Counter"
-        let mediaType = "text/plain"
-
-        let serverKey = P256.KeyAgreement.PrivateKey()
-
-        let (encapsulated, sender) = try OHTTPEncapsulation.encapsulateRequest(
-            keyID: 66,
-            publicKey: serverKey.publicKey,
-            ciphersuite: .P256_SHA256_AES_GCM_256,
-            mediaType: mediaType,
-            content: Data(request.utf8)
-        )
-        let (parsed, consumedBytes) = OHTTPEncapsulation.parseRequestHeader(encapsulatedRequest: encapsulated)!
-
-        let decapsulator = OHTTPEncapsulation.RequestDecapsulator(requestHeader: parsed, message: encapsulated.dropFirst(consumedBytes))
-        let (deEncapsulated, context) = try decapsulator.decapsulate(mediaType: mediaType, privateKey: serverKey)
-        XCTAssertEqual(String(decoding: deEncapsulated, as: UTF8.self), request)
-
-        var responseEncapsulator = try OHTTPEncapsulation.StreamingResponse(
-            context: context,
-            encapsulatedKey: parsed.encapsulatedKey,
-            mediaType: mediaType,
-            ciphersuite: .P256_SHA256_AES_GCM_256
-        )
-        var responseDecapsulator = OHTTPEncapsulation.StreamingResponseDecapsulator(
-            mediaType: mediaType, context: sender, ciphersuite: .P256_SHA256_AES_GCM_256
-        )
-
-        let messages: [Data] = (1...12).map { count in
-            Data("At the sound of the bell, the time will be \(count) PM.".utf8)
-        }
-        let encapsulatedMessages: [Data] = try messages.map { message in
-            return try responseEncapsulator.encapsulate(message, final: false)
-        }
-
-        let decapsulated: [Data] = try encapsulatedMessages.dropLast().map { message in
-            try responseDecapsulator.decapsulate(message, final: false)!
-        }
-
-        XCTAssertEqual(messages.dropLast(), decapsulated)
-        XCTAssertThrowsError(try responseDecapsulator.decapsulate(encapsulatedMessages.last!, final: true))
-    }
+    XCTAssertEqual(messages.dropLast(), decapsulated)
+    XCTAssertThrowsError(
+      try responseDecapsulator.decapsulate(encapsulatedMessages.last!, final: true))
+  }
 }

@@ -12,38 +12,38 @@
 //
 //===----------------------------------------------------------------------===//
 public struct ObliviousHTTPError: Error, Hashable {
-    private var backing: Backing
+  private var backing: Backing
 
-    fileprivate init(backing: Backing) {
-        self.backing = backing
-    }
+  fileprivate init(backing: Backing) {
+    self.backing = backing
+  }
 
-    @inline(never)
-    public static func invalidFramingIndicator(_ indicator: Int) -> ObliviousHTTPError {
-        return Self.init(backing: .invalidFramingIndicator(indicator))
-    }
+  @inline(never)
+  public static func invalidFramingIndicator(_ indicator: Int) -> ObliviousHTTPError {
+    return Self.init(backing: .invalidFramingIndicator(indicator))
+  }
 
-    @inline(never)
-    public static func invalidFieldSection(reason: String) -> ObliviousHTTPError {
-        return Self.init(backing: .invalidFieldSection(reason: reason))
-    }
+  @inline(never)
+  public static func invalidFieldSection(reason: String) -> ObliviousHTTPError {
+    return Self.init(backing: .invalidFieldSection(reason: reason))
+  }
 
-    @inline(never)
-    public static func truncatedEncoding(reason: String) -> ObliviousHTTPError {
-        return Self.init(backing: .truncatedEncoding(reason: reason))
-    }
+  @inline(never)
+  public static func truncatedEncoding(reason: String) -> ObliviousHTTPError {
+    return Self.init(backing: .truncatedEncoding(reason: reason))
+  }
 
-    @inline(never)
-    public static func invalidStatus(status: Int) -> ObliviousHTTPError {
-        return Self.init(backing: .invalidStatus(status: status))
-    }
+  @inline(never)
+  public static func invalidStatus(status: Int) -> ObliviousHTTPError {
+    return Self.init(backing: .invalidStatus(status: status))
+  }
 }
 
 extension ObliviousHTTPError {
-    enum Backing: Hashable, Sendable {
-        case invalidFramingIndicator(Int)
-        case invalidFieldSection(reason: String)
-        case truncatedEncoding(reason: String)
-        case invalidStatus(status: Int)
-    }
+  enum Backing: Hashable, Sendable {
+    case invalidFramingIndicator(Int)
+    case invalidFieldSection(reason: String)
+    case truncatedEncoding(reason: String)
+    case invalidStatus(status: Int)
+  }
 }

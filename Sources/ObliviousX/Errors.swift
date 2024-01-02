@@ -12,20 +12,20 @@
 //
 //===----------------------------------------------------------------------===//
 public struct ObliviousXError: Error, Hashable {
-    private var backing: Backing
+  private var backing: Backing
 
-    fileprivate init(backing: Backing) {
-        self.backing = backing
-    }
+  fileprivate init(backing: Backing) {
+    self.backing = backing
+  }
 
-    @inline(never)
-    public static func unsupportedHPKEParameters() -> ObliviousXError {
-        return Self.init(backing: .unsupportedHPKEParameters)
-    }
+  @inline(never)
+  public static func unsupportedHPKEParameters() -> ObliviousXError {
+    return Self.init(backing: .unsupportedHPKEParameters)
+  }
 }
 
 extension ObliviousXError {
-    enum Backing: Hashable, Sendable {
-        case unsupportedHPKEParameters
-    }
+  enum Backing: Hashable, Sendable {
+    case unsupportedHPKEParameters
+  }
 }
