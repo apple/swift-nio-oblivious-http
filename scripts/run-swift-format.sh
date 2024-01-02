@@ -46,7 +46,7 @@ if [[ "${swift_format_rc}" -ne 0 ]]; then
 
   To fix, run the following command:
 
-    % swift-format format --parallel --recursive --in-place Sources Tests Benchmarks/Benchmarks
+    % swift-format format --parallel --recursive --in-place Sources Tests
   "
   exit "${swift_format_rc}"
 fi
