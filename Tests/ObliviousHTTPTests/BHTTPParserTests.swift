@@ -12,19 +12,22 @@
 //
 //===----------------------------------------------------------------------===//
 import Foundation
-import XCTest
 import NIOCore
 import NIOHTTP1
+import XCTest
+
 @testable import ObliviousHTTP
 
 final class BHTTPParserTests: XCTestCase {
     func testExampleRequestKnownLength() throws {
         let exampleRequestB64 = """
-        AANHRVQFaHR0cHMACi9oZWxsby50eHRAbAp1c2VyLWFnZW50NGN1cmwvNy4xNi4z
-        IGxpYmN1cmwvNy4xNi4zIE9wZW5TU0wvMC45LjdsIHpsaWIvMS4yLjMEaG9zdA93
-        d3cuZXhhbXBsZS5jb20PYWNjZXB0LWxhbmd1YWdlBmVuLCBtaQAA
-        """
-        let exampleRequest = ByteBuffer(bytes: Data(base64Encoded: exampleRequestB64, options: .ignoreUnknownCharacters)!)
+            AANHRVQFaHR0cHMACi9oZWxsby50eHRAbAp1c2VyLWFnZW50NGN1cmwvNy4xNi4z
+            IGxpYmN1cmwvNy4xNi4zIE9wZW5TU0wvMC45LjdsIHpsaWIvMS4yLjMEaG9zdA93
+            d3cuZXhhbXBsZS5jb20PYWNjZXB0LWxhbmd1YWdlBmVuLCBtaQAA
+            """
+        let exampleRequest = ByteBuffer(
+            bytes: Data(base64Encoded: exampleRequestB64, options: .ignoreUnknownCharacters)!
+        )
         var parser = BHTTPParser(role: .server)
         parser.append(exampleRequest)
 
@@ -50,11 +53,13 @@ final class BHTTPParserTests: XCTestCase {
 
     func testExampleRequestKnownLengthExplicitEOF() throws {
         let exampleRequestB64 = """
-        AANHRVQFaHR0cHMACi9oZWxsby50eHRAbAp1c2VyLWFnZW50NGN1cmwvNy4xNi4z
-        IGxpYmN1cmwvNy4xNi4zIE9wZW5TU0wvMC45LjdsIHpsaWIvMS4yLjMEaG9zdA93
-        d3cuZXhhbXBsZS5jb20PYWNjZXB0LWxhbmd1YWdlBmVuLCBtaQAA
-        """
-        let exampleRequest = ByteBuffer(bytes: Data(base64Encoded: exampleRequestB64, options: .ignoreUnknownCharacters)!)
+            AANHRVQFaHR0cHMACi9oZWxsby50eHRAbAp1c2VyLWFnZW50NGN1cmwvNy4xNi4z
+            IGxpYmN1cmwvNy4xNi4zIE9wZW5TU0wvMC45LjdsIHpsaWIvMS4yLjMEaG9zdA93
+            d3cuZXhhbXBsZS5jb20PYWNjZXB0LWxhbmd1YWdlBmVuLCBtaQAA
+            """
+        let exampleRequest = ByteBuffer(
+            bytes: Data(base64Encoded: exampleRequestB64, options: .ignoreUnknownCharacters)!
+        )
         var parser = BHTTPParser(role: .server)
         parser.append(exampleRequest)
         parser.completeBodyReceived()
@@ -81,10 +86,10 @@ final class BHTTPParserTests: XCTestCase {
 
     func testExampleRequestKnownLengthDripFed() throws {
         let exampleRequestB64 = """
-        AANHRVQFaHR0cHMACi9oZWxsby50eHRAbAp1c2VyLWFnZW50NGN1cmwvNy4xNi4z
-        IGxpYmN1cmwvNy4xNi4zIE9wZW5TU0wvMC45LjdsIHpsaWIvMS4yLjMEaG9zdA93
-        d3cuZXhhbXBsZS5jb20PYWNjZXB0LWxhbmd1YWdlBmVuLCBtaQAA
-        """
+            AANHRVQFaHR0cHMACi9oZWxsby50eHRAbAp1c2VyLWFnZW50NGN1cmwvNy4xNi4z
+            IGxpYmN1cmwvNy4xNi4zIE9wZW5TU0wvMC45LjdsIHpsaWIvMS4yLjMEaG9zdA93
+            d3cuZXhhbXBsZS5jb20PYWNjZXB0LWxhbmd1YWdlBmVuLCBtaQAA
+            """
         var exampleRequest = Data(base64Encoded: exampleRequestB64, options: .ignoreUnknownCharacters)!
         var parser = BHTTPParser(role: .server)
 
@@ -115,11 +120,13 @@ final class BHTTPParserTests: XCTestCase {
 
     func testExampleRequestIndeterminateLength() throws {
         let exampleRequestB64 = """
-        AgNHRVQFaHR0cHMACi9oZWxsby50eHQKdXNlci1hZ2VudDRjdXJsLzcuMTYuMyBs
-        aWJjdXJsLzcuMTYuMyBPcGVuU1NMLzAuOS43bCB6bGliLzEuMi4zBGhvc3QPd3d3
-        LmV4YW1wbGUuY29tD2FjY2VwdC1sYW5ndWFnZQZlbiwgbWkAAAAAAAAAAAAAAAAA
-        """
-        let exampleRequest = ByteBuffer(bytes: Data(base64Encoded: exampleRequestB64, options: .ignoreUnknownCharacters)!)
+            AgNHRVQFaHR0cHMACi9oZWxsby50eHQKdXNlci1hZ2VudDRjdXJsLzcuMTYuMyBs
+            aWJjdXJsLzcuMTYuMyBPcGVuU1NMLzAuOS43bCB6bGliLzEuMi4zBGhvc3QPd3d3
+            LmV4YW1wbGUuY29tD2FjY2VwdC1sYW5ndWFnZQZlbiwgbWkAAAAAAAAAAAAAAAAA
+            """
+        let exampleRequest = ByteBuffer(
+            bytes: Data(base64Encoded: exampleRequestB64, options: .ignoreUnknownCharacters)!
+        )
         var parser = BHTTPParser(role: .server)
         parser.append(exampleRequest)
 
@@ -145,11 +152,13 @@ final class BHTTPParserTests: XCTestCase {
 
     func testExampleRequestIndeterminateLengthExplicitEOF() throws {
         let exampleRequestB64 = """
-        AgNHRVQFaHR0cHMACi9oZWxsby50eHQKdXNlci1hZ2VudDRjdXJsLzcuMTYuMyBs
-        aWJjdXJsLzcuMTYuMyBPcGVuU1NMLzAuOS43bCB6bGliLzEuMi4zBGhvc3QPd3d3
-        LmV4YW1wbGUuY29tD2FjY2VwdC1sYW5ndWFnZQZlbiwgbWkAAAAAAAAAAAAAAAAA
-        """
-        let exampleRequest = ByteBuffer(bytes: Data(base64Encoded: exampleRequestB64, options: .ignoreUnknownCharacters)!)
+            AgNHRVQFaHR0cHMACi9oZWxsby50eHQKdXNlci1hZ2VudDRjdXJsLzcuMTYuMyBs
+            aWJjdXJsLzcuMTYuMyBPcGVuU1NMLzAuOS43bCB6bGliLzEuMi4zBGhvc3QPd3d3
+            LmV4YW1wbGUuY29tD2FjY2VwdC1sYW5ndWFnZQZlbiwgbWkAAAAAAAAAAAAAAAAA
+            """
+        let exampleRequest = ByteBuffer(
+            bytes: Data(base64Encoded: exampleRequestB64, options: .ignoreUnknownCharacters)!
+        )
         var parser = BHTTPParser(role: .server)
         parser.append(exampleRequest)
         parser.completeBodyReceived()
@@ -176,10 +185,10 @@ final class BHTTPParserTests: XCTestCase {
 
     func testExampleRequestIndeterminateLengthDripFed() throws {
         let exampleRequestB64 = """
-        AgNHRVQFaHR0cHMACi9oZWxsby50eHQKdXNlci1hZ2VudDRjdXJsLzcuMTYuMyBs
-        aWJjdXJsLzcuMTYuMyBPcGVuU1NMLzAuOS43bCB6bGliLzEuMi4zBGhvc3QPd3d3
-        LmV4YW1wbGUuY29tD2FjY2VwdC1sYW5ndWFnZQZlbiwgbWkAAAAAAAAAAAAAAAAA
-        """
+            AgNHRVQFaHR0cHMACi9oZWxsby50eHQKdXNlci1hZ2VudDRjdXJsLzcuMTYuMyBs
+            aWJjdXJsLzcuMTYuMyBPcGVuU1NMLzAuOS43bCB6bGliLzEuMi4zBGhvc3QPd3d3
+            LmV4YW1wbGUuY29tD2FjY2VwdC1sYW5ndWFnZQZlbiwgbWkAAAAAAAAAAAAAAAAA
+            """
         var exampleRequest = Data(base64Encoded: exampleRequestB64, options: .ignoreUnknownCharacters)!
         var parser = BHTTPParser(role: .server)
 
@@ -210,16 +219,18 @@ final class BHTTPParserTests: XCTestCase {
 
     func testExampleResponseIndeterminateLength() throws {
         let exampleResponseB64 = """
-        A0BmB3J1bm5pbmcKInNsZWVwIDE1IgBAZwRsaW5rIzwvc3R5bGUuY3NzPjsgcmVs
-        PXByZWxvYWQ7IGFzPXN0eWxlBGxpbmskPC9zY3JpcHQuanM+OyByZWw9cHJlbG9h
-        ZDsgYXM9c2NyaXB0AEDIBGRhdGUdTW9uLCAyNyBKdWwgMjAwOSAxMjoyODo1MyBH
-        TVQGc2VydmVyBkFwYWNoZQ1sYXN0LW1vZGlmaWVkHVdlZCwgMjIgSnVsIDIwMDkg
-        MTk6MTU6NTYgR01UBGV0YWcUIjM0YWEzODctZC0xNTY4ZWIwMCINYWNjZXB0LXJh
-        bmdlcwVieXRlcw5jb250ZW50LWxlbmd0aAI1MQR2YXJ5D0FjY2VwdC1FbmNvZGlu
-        Zwxjb250ZW50LXR5cGUKdGV4dC9wbGFpbgAzSGVsbG8gV29ybGQhIE15IGNvbnRl
-        bnQgaW5jbHVkZXMgYSB0cmFpbGluZyBDUkxGLg0KAAA=
-        """
-        let exampleResponse = ByteBuffer(bytes: Data(base64Encoded: exampleResponseB64, options: .ignoreUnknownCharacters)!)
+            A0BmB3J1bm5pbmcKInNsZWVwIDE1IgBAZwRsaW5rIzwvc3R5bGUuY3NzPjsgcmVs
+            PXByZWxvYWQ7IGFzPXN0eWxlBGxpbmskPC9zY3JpcHQuanM+OyByZWw9cHJlbG9h
+            ZDsgYXM9c2NyaXB0AEDIBGRhdGUdTW9uLCAyNyBKdWwgMjAwOSAxMjoyODo1MyBH
+            TVQGc2VydmVyBkFwYWNoZQ1sYXN0LW1vZGlmaWVkHVdlZCwgMjIgSnVsIDIwMDkg
+            MTk6MTU6NTYgR01UBGV0YWcUIjM0YWEzODctZC0xNTY4ZWIwMCINYWNjZXB0LXJh
+            bmdlcwVieXRlcw5jb250ZW50LWxlbmd0aAI1MQR2YXJ5D0FjY2VwdC1FbmNvZGlu
+            Zwxjb250ZW50LXR5cGUKdGV4dC9wbGFpbgAzSGVsbG8gV29ybGQhIE15IGNvbnRl
+            bnQgaW5jbHVkZXMgYSB0cmFpbGluZyBDUkxGLg0KAAA=
+            """
+        let exampleResponse = ByteBuffer(
+            bytes: Data(base64Encoded: exampleResponseB64, options: .ignoreUnknownCharacters)!
+        )
         var parser = BHTTPParser(role: .client)
         parser.append(exampleResponse)
 
@@ -274,16 +285,18 @@ final class BHTTPParserTests: XCTestCase {
 
     func testExampleResponseIndeterminateLengthExplicitEOF() throws {
         let exampleResponseB64 = """
-        A0BmB3J1bm5pbmcKInNsZWVwIDE1IgBAZwRsaW5rIzwvc3R5bGUuY3NzPjsgcmVs
-        PXByZWxvYWQ7IGFzPXN0eWxlBGxpbmskPC9zY3JpcHQuanM+OyByZWw9cHJlbG9h
-        ZDsgYXM9c2NyaXB0AEDIBGRhdGUdTW9uLCAyNyBKdWwgMjAwOSAxMjoyODo1MyBH
-        TVQGc2VydmVyBkFwYWNoZQ1sYXN0LW1vZGlmaWVkHVdlZCwgMjIgSnVsIDIwMDkg
-        MTk6MTU6NTYgR01UBGV0YWcUIjM0YWEzODctZC0xNTY4ZWIwMCINYWNjZXB0LXJh
-        bmdlcwVieXRlcw5jb250ZW50LWxlbmd0aAI1MQR2YXJ5D0FjY2VwdC1FbmNvZGlu
-        Zwxjb250ZW50LXR5cGUKdGV4dC9wbGFpbgAzSGVsbG8gV29ybGQhIE15IGNvbnRl
-        bnQgaW5jbHVkZXMgYSB0cmFpbGluZyBDUkxGLg0KAAA=
-        """
-        let exampleResponse = ByteBuffer(bytes: Data(base64Encoded: exampleResponseB64, options: .ignoreUnknownCharacters)!)
+            A0BmB3J1bm5pbmcKInNsZWVwIDE1IgBAZwRsaW5rIzwvc3R5bGUuY3NzPjsgcmVs
+            PXByZWxvYWQ7IGFzPXN0eWxlBGxpbmskPC9zY3JpcHQuanM+OyByZWw9cHJlbG9h
+            ZDsgYXM9c2NyaXB0AEDIBGRhdGUdTW9uLCAyNyBKdWwgMjAwOSAxMjoyODo1MyBH
+            TVQGc2VydmVyBkFwYWNoZQ1sYXN0LW1vZGlmaWVkHVdlZCwgMjIgSnVsIDIwMDkg
+            MTk6MTU6NTYgR01UBGV0YWcUIjM0YWEzODctZC0xNTY4ZWIwMCINYWNjZXB0LXJh
+            bmdlcwVieXRlcw5jb250ZW50LWxlbmd0aAI1MQR2YXJ5D0FjY2VwdC1FbmNvZGlu
+            Zwxjb250ZW50LXR5cGUKdGV4dC9wbGFpbgAzSGVsbG8gV29ybGQhIE15IGNvbnRl
+            bnQgaW5jbHVkZXMgYSB0cmFpbGluZyBDUkxGLg0KAAA=
+            """
+        let exampleResponse = ByteBuffer(
+            bytes: Data(base64Encoded: exampleResponseB64, options: .ignoreUnknownCharacters)!
+        )
         var parser = BHTTPParser(role: .client)
         parser.append(exampleResponse)
         parser.completeBodyReceived()
@@ -339,16 +352,19 @@ final class BHTTPParserTests: XCTestCase {
 
     func testExampleResponseIndeterminateLengthDripFed() throws {
         let exampleResponseB64 = """
-        A0BmB3J1bm5pbmcKInNsZWVwIDE1IgBAZwRsaW5rIzwvc3R5bGUuY3NzPjsgcmVs
-        PXByZWxvYWQ7IGFzPXN0eWxlBGxpbmskPC9zY3JpcHQuanM+OyByZWw9cHJlbG9h
-        ZDsgYXM9c2NyaXB0AEDIBGRhdGUdTW9uLCAyNyBKdWwgMjAwOSAxMjoyODo1MyBH
-        TVQGc2VydmVyBkFwYWNoZQ1sYXN0LW1vZGlmaWVkHVdlZCwgMjIgSnVsIDIwMDkg
-        MTk6MTU6NTYgR01UBGV0YWcUIjM0YWEzODctZC0xNTY4ZWIwMCINYWNjZXB0LXJh
-        bmdlcwVieXRlcw5jb250ZW50LWxlbmd0aAI1MQR2YXJ5D0FjY2VwdC1FbmNvZGlu
-        Zwxjb250ZW50LXR5cGUKdGV4dC9wbGFpbgAzSGVsbG8gV29ybGQhIE15IGNvbnRl
-        bnQgaW5jbHVkZXMgYSB0cmFpbGluZyBDUkxGLg0KAAA=
-        """
-        var exampleResponse = Data(base64Encoded: exampleResponseB64, options: .ignoreUnknownCharacters)!
+            A0BmB3J1bm5pbmcKInNsZWVwIDE1IgBAZwRsaW5rIzwvc3R5bGUuY3NzPjsgcmVs
+            PXByZWxvYWQ7IGFzPXN0eWxlBGxpbmskPC9zY3JpcHQuanM+OyByZWw9cHJlbG9h
+            ZDsgYXM9c2NyaXB0AEDIBGRhdGUdTW9uLCAyNyBKdWwgMjAwOSAxMjoyODo1MyBH
+            TVQGc2VydmVyBkFwYWNoZQ1sYXN0LW1vZGlmaWVkHVdlZCwgMjIgSnVsIDIwMDkg
+            MTk6MTU6NTYgR01UBGV0YWcUIjM0YWEzODctZC0xNTY4ZWIwMCINYWNjZXB0LXJh
+            bmdlcwVieXRlcw5jb250ZW50LWxlbmd0aAI1MQR2YXJ5D0FjY2VwdC1FbmNvZGlu
+            Zwxjb250ZW50LXR5cGUKdGV4dC9wbGFpbgAzSGVsbG8gV29ybGQhIE15IGNvbnRl
+            bnQgaW5jbHVkZXMgYSB0cmFpbGluZyBDUkxGLg0KAAA=
+            """
+        var exampleResponse = Data(
+            base64Encoded: exampleResponseB64,
+            options: .ignoreUnknownCharacters
+        )!
         var parser = BHTTPParser(role: .client)
 
         var results: [HTTPClientResponsePart] = []
@@ -410,4 +426,3 @@ final class BHTTPParserTests: XCTestCase {
         )
     }
 }
-

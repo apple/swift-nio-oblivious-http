@@ -14,15 +14,14 @@
 import NIOCore
 import NIOHTTP1
 
-
 // For now this type is entirely stateless, which is achieved by using the indefinite-length encoding.
 // It also means it does not enforce correctness, and so can produce invalid encodings if a user holds
 // it wrong.
 //
 // Later optimizations can be made by adding more state into this type.
 public struct BHTTPSerializer {
-    public init() { }
-    
+    public init() {}
+
     public func serialize(_ message: Message, into buffer: inout ByteBuffer) {
         switch message {
         case .request(.head(let requestHead)):
@@ -74,7 +73,10 @@ public struct BHTTPSerializer {
         buffer.writeVarintPrefixedImmutableBuffer(chunk)
     }
 
-    private static func serializeIndeterminateLengthFieldSection(_ fields: HTTPHeaders, into buffer: inout ByteBuffer) {
+    private static func serializeIndeterminateLengthFieldSection(
+        _ fields: HTTPHeaders,
+        into buffer: inout ByteBuffer
+    ) {
         for (name, value) in fields {
             buffer.writeVarintPrefixedString(name)
             buffer.writeVarintPrefixedString(value)
@@ -82,7 +84,6 @@ public struct BHTTPSerializer {
         // This is technically a varint but we can skip the check there because we know it can always encode in one byte.
         buffer.writeInteger(UInt8(0))
     }
-
 
 }
 

@@ -38,28 +38,46 @@ public struct BHTTPParser {
     public mutating func nextMessage() throws -> Message? {
         while true {
             let parseResult: ParseResult
-            
+
             // Take a copy we can modify. This won't CoW: we only move the reader index.
             guard var buffer = self.buffer else {
                 // No buffered bytes left.
                 return nil
             }
-            
+
             switch self.state {
             case .idle:
                 parseResult = try Self.parseFramingIndicator(&buffer, role: self.role)
-            case .awaitingRequestHead(knownLength: let knownLength):
-                parseResult = try Self.parseRequestHead(&buffer, knownLength: knownLength, completeBodyReceived: self.readEOF)
-            case .awaitingResponseHead(knownLength: let knownLength):
-                parseResult = try Self.parseResponseHead(&buffer, knownLength: knownLength, completeBodyReceived: self.readEOF)
+            case .awaitingRequestHead(let knownLength):
+                parseResult = try Self.parseRequestHead(
+                    &buffer,
+                    knownLength: knownLength,
+                    completeBodyReceived: self.readEOF
+                )
+            case .awaitingResponseHead(let knownLength):
+                parseResult = try Self.parseResponseHead(
+                    &buffer,
+                    knownLength: knownLength,
+                    completeBodyReceived: self.readEOF
+                )
             case .awaitingContent(let content):
-                parseResult = try Self.parseContent(&buffer, content: content, completeBodyReceived: self.readEOF, role: self.role)
-            case .awaitingTrailers(knownLength: let knownLength):
-                parseResult = try Self.parseTrailers(&buffer, knownLength: knownLength, completeBodyReceived: self.readEOF, role: self.role)
+                parseResult = try Self.parseContent(
+                    &buffer,
+                    content: content,
+                    completeBodyReceived: self.readEOF,
+                    role: self.role
+                )
+            case .awaitingTrailers(let knownLength):
+                parseResult = try Self.parseTrailers(
+                    &buffer,
+                    knownLength: knownLength,
+                    completeBodyReceived: self.readEOF,
+                    role: self.role
+                )
             case .complete:
                 parseResult = .needMoreBytes
             }
-            
+
             switch parseResult {
             case .complete(let result, let nextState):
                 self.state = nextState
@@ -97,13 +115,19 @@ public struct BHTTPParser {
         }
     }
 
-    static func parseRequestHead(_ buffer: inout ByteBuffer, knownLength: Bool, completeBodyReceived: Bool) throws -> ParseResult {
+    static func parseRequestHead(
+        _ buffer: inout ByteBuffer,
+        knownLength: Bool,
+        completeBodyReceived: Bool
+    ) throws -> ParseResult {
         // First, parse request control data. We do not need to reset the reader index when we don't have enough bytes, the outer code
         // will handle that for us.
         guard let method = buffer.readVarintLengthPrefixedSlice(),
-              let _ = buffer.readVarintLengthPrefixedSlice(), // This is :scheme:, which we can't support in the HTTP1 type.
-              let authority = buffer.readVarintLengthPrefixedSlice(),
-              let path = buffer.readVarintLengthPrefixedSlice() else {
+            // This is :scheme:, which we can't support in the HTTP1 type.
+            let _ = buffer.readVarintLengthPrefixedSlice(),
+            let authority = buffer.readVarintLengthPrefixedSlice(),
+            let path = buffer.readVarintLengthPrefixedSlice()
+        else {
             return .needMoreBytes
         }
 
@@ -146,10 +170,17 @@ public struct BHTTPParser {
             uri: String(buffer: path),
             headers: headers
         )
-        return .complete(.request(.head(head)), nextState: .awaitingContent(.init(knownLength: knownLength)))
+        return .complete(
+            .request(.head(head)),
+            nextState: .awaitingContent(.init(knownLength: knownLength))
+        )
     }
 
-    static func parseResponseHead(_ buffer: inout ByteBuffer, knownLength: Bool, completeBodyReceived: Bool) throws -> ParseResult {
+    static func parseResponseHead(
+        _ buffer: inout ByteBuffer,
+        knownLength: Bool,
+        completeBodyReceived: Bool
+    ) throws -> ParseResult {
         // First, parse response control data. We do not need to reset the reader index when we don't have enough bytes, the outer code
         // will handle that for us.
         guard let statusCode = buffer.readVarint() else {
@@ -203,7 +234,12 @@ public struct BHTTPParser {
         return .complete(.response(.head(head)), nextState: nextState)
     }
 
-    static func parseContent(_ buffer: inout ByteBuffer, content: State.Content, completeBodyReceived: Bool, role: Role) throws -> ParseResult {
+    static func parseContent(
+        _ buffer: inout ByteBuffer,
+        content: State.Content,
+        completeBodyReceived: Bool,
+        role: Role
+    ) throws -> ParseResult {
         switch content {
         case .knownLengthBeforeFirstChunk:
             // First chunk, we don't know what the length is.
@@ -225,7 +261,7 @@ public struct BHTTPParser {
                 return .needMoreBytes
             }
 
-        case .knownLength(remainingBytes: let remainingBytes):
+        case .knownLength(let remainingBytes):
             // Ok, we know the length. Read either that much, or whatever is in the buffer.
             // We can force-unwrap because we account for readable bytes here.
             let bytesToRead = min(remainingBytes, buffer.readableBytes)
@@ -295,22 +331,26 @@ public struct BHTTPParser {
         case .indeterminateLengthWaitingForChunkLength:
             // Not first chunk, we don't know what the length is. If the length is 0,
             // we're at the end.
-            if let length = buffer.readVarint() {
-                let nextState: State
-                if length > 0 {
-                    nextState = .awaitingContent(.indeterminateLength(remainingChunkBytes: length))
-                } else {
-                    nextState = .awaitingTrailers(knownLength: false)
-                }
-
-                return .continue(nextState: nextState)
-            } else {
+            guard let length = buffer.readVarint() else {
                 return .needMoreBytes
             }
+            let nextState: State
+            if length > 0 {
+                nextState = .awaitingContent(.indeterminateLength(remainingChunkBytes: length))
+            } else {
+                nextState = .awaitingTrailers(knownLength: false)
+            }
+
+            return .continue(nextState: nextState)
         }
     }
 
-    static func parseTrailers(_ buffer: inout ByteBuffer, knownLength: Bool, completeBodyReceived: Bool, role: Role) throws -> ParseResult {
+    static func parseTrailers(
+        _ buffer: inout ByteBuffer,
+        knownLength: Bool,
+        completeBodyReceived: Bool,
+        role: Role
+    ) throws -> ParseResult {
         // Trailers are just a field section.
         let possibleFieldSection: ByteBuffer?
 
@@ -332,7 +372,7 @@ public struct BHTTPParser {
         case (.none, true):
             // This is a fun case! We have no trailers.
             return .complete(role.trailersForRole(nil), nextState: .complete)
-        case(.some, _):
+        case (.some, _):
             // We can fallthrough here, we either got a field section _or_ we have EOF.
             break
         }
@@ -342,17 +382,22 @@ public struct BHTTPParser {
             try Self.parseFieldSection(&fieldSection, into: &headers)
         }
 
-        if headers.isEmpty {
-            return .complete(role.trailersForRole(nil), nextState: .complete)
-        } else {
+        guard headers.isEmpty else {
             return .complete(role.trailersForRole(headers), nextState: .complete)
         }
+        return .complete(role.trailersForRole(nil), nextState: .complete)
     }
 
-    static func parseFieldSection(_ fieldSection: inout ByteBuffer, into headers: inout HTTPHeaders) throws {
+    static func parseFieldSection(
+        _ fieldSection: inout ByteBuffer,
+        into headers: inout HTTPHeaders
+    )
+        throws
+    {
         while fieldSection.readableBytes > 0 {
             guard let fieldName = fieldSection.readVarintLengthPrefixedSlice(),
-                  let fieldValue = fieldSection.readVarintLengthPrefixedSlice() else {
+                let fieldValue = fieldSection.readVarintLengthPrefixedSlice()
+            else {
                 // Uh-oh, framing error!
                 throw ObliviousHTTPError.invalidFieldSection(reason: "Truncated field name or value")
             }
@@ -478,4 +523,3 @@ extension HTTPResponseHead {
         100 <= self.status.code && self.status.code < 200 && self.status.code != 101
     }
 }
-

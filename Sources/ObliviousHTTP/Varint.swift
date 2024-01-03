@@ -59,11 +59,11 @@ extension ByteBuffer {
             // Set the top two bit mask, then write the value.
             let value = UInt16(truncatingIfNeeded: value) | (0x40 << 8)
             return self.writeInteger(value)
-        case 0..<1073741823:
+        case 0..<1_073_741_823:
             // Set the top two bit mask, then write the value.
             let value = UInt32(truncatingIfNeeded: value) | (0x80 << 24)
             return self.writeInteger(value)
-        case 0..<4611686018427387903:
+        case 0..<4_611_686_018_427_387_903:
             // Set the top two bit mask, then write the value.
             let value = UInt64(truncatingIfNeeded: value) | (0xC0 << 56)
             return self.writeInteger(value)

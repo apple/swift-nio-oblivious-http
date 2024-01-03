@@ -16,10 +16,22 @@ import Foundation
 
 @available(macOS 14, iOS 17, *)
 public enum OHTTPEncapsulation {
-    public static func encapsulateRequest<PublicKey: HPKEDiffieHellmanPublicKey, Message: DataProtocol>(
-        keyID: UInt8, publicKey: PublicKey, ciphersuite: HPKE.Ciphersuite, mediaType: String, content: Message
+    public static func encapsulateRequest<
+        PublicKey: HPKEDiffieHellmanPublicKey,
+        Message: DataProtocol
+    >(
+        keyID: UInt8,
+        publicKey: PublicKey,
+        ciphersuite: HPKE.Ciphersuite,
+        mediaType: String,
+        content: Message
     ) throws -> (Data, HPKE.Sender) {
-        var streamer = try StreamingRequest(keyID: keyID, publicKey: publicKey, ciphersuite: ciphersuite, mediaType: mediaType)
+        var streamer = try StreamingRequest(
+            keyID: keyID,
+            publicKey: publicKey,
+            ciphersuite: ciphersuite,
+            mediaType: mediaType
+        )
         var payload = streamer.header
         try payload.append(streamer.encapsulate(content: content, final: false))
         return (payload, streamer.sender)
@@ -30,7 +42,10 @@ public enum OHTTPEncapsulation {
         public private(set) var sender: HPKE.Sender
 
         public init<PublicKey: HPKEDiffieHellmanPublicKey>(
-            keyID: UInt8, publicKey: PublicKey, ciphersuite: HPKE.Ciphersuite, mediaType: String
+            keyID: UInt8,
+            publicKey: PublicKey,
+            ciphersuite: HPKE.Ciphersuite,
+            mediaType: String
         ) throws {
             var header = OHTTPEncapsulation.buildHeader(keyID: keyID, ciphersuite: ciphersuite)
             self.sender = try HPKE.Sender(
@@ -41,15 +56,23 @@ public enum OHTTPEncapsulation {
             header.append(self.sender.encapsulatedKey)
             self.header = header
         }
-        
-        public mutating func encapsulate<Message: DataProtocol>(content: Message, final: Bool, includeEncapsulationWrapper: Bool = false) throws -> Data {
+
+        public mutating func encapsulate<Message: DataProtocol>(
+            content: Message,
+            final: Bool,
+            includeEncapsulationWrapper: Bool = false
+        ) throws -> Data {
             // Right now we can't add the encapsulation wrapper because it is broken in the draft spec.
             precondition(includeEncapsulationWrapper == false)
             return try self.sender.seal(content, authenticating: final ? finalAAD : Data())
         }
     }
 
-    public static func parseRequestHeader<Bytes: RandomAccessCollection>(encapsulatedRequest: Bytes) -> (RequestHeader, Int)? where Bytes.Element == UInt8 {
+    public static func parseRequestHeader<Bytes: RandomAccessCollection>(
+        encapsulatedRequest: Bytes
+    )
+        -> (RequestHeader, Int)? where Bytes.Element == UInt8
+    {
         guard encapsulatedRequest.count >= 7 else {
             return nil
         }
@@ -57,10 +80,11 @@ public enum OHTTPEncapsulation {
         let header = encapsulatedRequest.prefix(7)
         var bytes = encapsulatedRequest[...]
         guard let keyID = bytes.popUInt8(),
-              let kem = bytes.popUInt16().flatMap({ HPKE.KEM(networkIdentifier: $0) }),
-              let kdf = bytes.popUInt16().flatMap({ HPKE.KDF(networkIdentifier: $0) }),
-              let aead = bytes.popUInt16().flatMap({ HPKE.AEAD(networkIdentifier: $0) }),
-              let encapsulatedKey = bytes.popFirst(kem.encapsulatedKeySize) else {
+            let kem = bytes.popUInt16().flatMap({ HPKE.KEM(networkIdentifier: $0) }),
+            let kdf = bytes.popUInt16().flatMap({ HPKE.KDF(networkIdentifier: $0) }),
+            let aead = bytes.popUInt16().flatMap({ HPKE.AEAD(networkIdentifier: $0) }),
+            let encapsulatedKey = bytes.popFirst(kem.encapsulatedKeySize)
+        else {
             return nil
         }
 
@@ -87,15 +111,6 @@ public enum OHTTPEncapsulation {
         public private(set) var headerBytes: Data
 
         public private(set) var encapsulatedKey: Data
-
-        internal init(keyID: UInt8, kem: HPKE.KEM, kdf: HPKE.KDF, aead: HPKE.AEAD, headerBytes: Data, encapsulatedKey: Data) {
-            self.keyID = keyID
-            self.kem = kem
-            self.kdf = kdf
-            self.aead = aead
-            self.headerBytes = headerBytes
-            self.encapsulatedKey = encapsulatedKey
-        }
     }
 
     public struct StreamingRequestDecapsulator {
@@ -103,18 +118,30 @@ public enum OHTTPEncapsulation {
 
         public private(set) var recipient: HPKE.Recipient
 
-        public init<PrivateKey: HPKEDiffieHellmanPrivateKey>(requestHeader: RequestHeader, mediaType: String, privateKey: PrivateKey) throws {
+        public init<PrivateKey: HPKEDiffieHellmanPrivateKey>(
+            requestHeader: RequestHeader,
+            mediaType: String,
+            privateKey: PrivateKey
+        ) throws {
             self.header = requestHeader
             let info = OHTTPEncapsulation.buildInfo(header: self.header.headerBytes, mediaType: mediaType)
             self.recipient = try HPKE.Recipient(
                 privateKey: privateKey,
-                ciphersuite: HPKE.Ciphersuite(kem: self.header.kem, kdf: self.header.kdf, aead: self.header.aead),
+                ciphersuite: HPKE.Ciphersuite(
+                    kem: self.header.kem,
+                    kdf: self.header.kdf,
+                    aead: self.header.aead
+                ),
                 info: info,
                 encapsulatedKey: self.header.encapsulatedKey
             )
         }
 
-        public mutating func decapsulate<Message: DataProtocol>(content: Message, final: Bool, includeEncapsulationWrapper: Bool = false) throws -> Data {
+        public mutating func decapsulate<Message: DataProtocol>(
+            content: Message,
+            final: Bool,
+            includeEncapsulationWrapper: Bool = false
+        ) throws -> Data {
             // Right now we can't add the encapsulation wrapper because it is broken in the draft spec.
             precondition(includeEncapsulationWrapper == false)
 
@@ -122,23 +149,43 @@ public enum OHTTPEncapsulation {
         }
     }
 
-    public static func encapsulateResponse<Message: DataProtocol, EncapsulatedKey: RandomAccessCollection> (
-        context: HPKE.Recipient, encapsulatedKey: EncapsulatedKey,  mediaType: String, ciphersuite: HPKE.Ciphersuite, content: Message
+    public static func encapsulateResponse<
+        Message: DataProtocol,
+        EncapsulatedKey: RandomAccessCollection
+    >(
+        context: HPKE.Recipient,
+        encapsulatedKey: EncapsulatedKey,
+        mediaType: String,
+        ciphersuite: HPKE.Ciphersuite,
+        content: Message
     ) throws -> Data where EncapsulatedKey.Element == UInt8 {
-        var streamingResponse = try StreamingResponse(context: context, encapsulatedKey: encapsulatedKey, mediaType: mediaType, ciphersuite: ciphersuite)
+        var streamingResponse = try StreamingResponse(
+            context: context,
+            encapsulatedKey: encapsulatedKey,
+            mediaType: mediaType,
+            ciphersuite: ciphersuite
+        )
         return try streamingResponse.encapsulate(content, final: false)
     }
 
     public static func decapsulateResponse<ResponsePayload: DataProtocol>(
-        responsePayload: ResponsePayload, mediaType: String, context: HPKE.Sender, ciphersuite: HPKE.Ciphersuite
+        responsePayload: ResponsePayload,
+        mediaType: String,
+        context: HPKE.Sender,
+        ciphersuite: HPKE.Ciphersuite
     ) throws -> Data {
-        var streamingDecapsulator = StreamingResponseDecapsulator(mediaType: mediaType, context: context, ciphersuite: ciphersuite)
+        var streamingDecapsulator = StreamingResponseDecapsulator(
+            mediaType: mediaType,
+            context: context,
+            ciphersuite: ciphersuite
+        )
 
         // Currently this cannot return nil, as it does no internal buffering.
         return try streamingDecapsulator.decapsulate(responsePayload, final: false)!
     }
 
-    public struct RequestDecapsulator<Bytes: RandomAccessCollection & DataProtocol> where Bytes.Element == UInt8, Bytes.SubSequence == Bytes {
+    public struct RequestDecapsulator<Bytes: RandomAccessCollection & DataProtocol>
+    where Bytes.Element == UInt8, Bytes.SubSequence == Bytes {
         public private(set) var header: RequestHeader
 
         public private(set) var message: Bytes
@@ -148,8 +195,15 @@ public enum OHTTPEncapsulation {
             self.message = message
         }
 
-        public func decapsulate<PrivateKey: HPKEDiffieHellmanPrivateKey>(mediaType: String, privateKey: PrivateKey) throws -> (Data, HPKE.Recipient) {
-            var decapsulator = try StreamingRequestDecapsulator(requestHeader: self.header, mediaType: mediaType, privateKey: privateKey)
+        public func decapsulate<PrivateKey: HPKEDiffieHellmanPrivateKey>(
+            mediaType: String,
+            privateKey: PrivateKey
+        ) throws -> (Data, HPKE.Recipient) {
+            var decapsulator = try StreamingRequestDecapsulator(
+                requestHeader: self.header,
+                mediaType: mediaType,
+                privateKey: privateKey
+            )
             let decrypted = try decapsulator.decapsulate(content: self.message, final: false)
             return (decrypted, decapsulator.recipient)
         }
@@ -166,10 +220,16 @@ public enum OHTTPEncapsulation {
 
         private var counter: UInt64
 
-        public init<EncapsulatedKey: RandomAccessCollection> (
-            context: HPKE.Recipient, encapsulatedKey: EncapsulatedKey,  mediaType: String, ciphersuite: HPKE.Ciphersuite
+        public init<EncapsulatedKey: RandomAccessCollection>(
+            context: HPKE.Recipient,
+            encapsulatedKey: EncapsulatedKey,
+            mediaType: String,
+            ciphersuite: HPKE.Ciphersuite
         ) throws where EncapsulatedKey.Element == UInt8 {
-            let secret = try context.exportSecret(context: Array(mediaType.utf8), outputByteCount: ciphersuite.aead.keyByteCount)
+            let secret = try context.exportSecret(
+                context: Array(mediaType.utf8),
+                outputByteCount: ciphersuite.aead.keyByteCount
+            )
             let nonceLength = max(ciphersuite.aead.keyByteCount, ciphersuite.aead.nonceByteCount)
             var responseNonce = Data(repeating: 0, count: nonceLength)
             responseNonce.withUnsafeMutableBytes { $0.initializeWithRandomBytes(count: nonceLength) }
@@ -180,13 +240,27 @@ public enum OHTTPEncapsulation {
             salt.append(contentsOf: responseNonce)
 
             let prk = ciphersuite.kdf.extract(salt: salt, ikm: secret)
-            self.aeadKey = ciphersuite.kdf.expand(prk: prk, info: Data("key".utf8), outputByteCount: ciphersuite.aead.keyByteCount)
-            self.aeadNonce = Data(ciphersuite.kdf.expand(prk: prk, info: Data("nonce".utf8), outputByteCount: ciphersuite.aead.nonceByteCount))
+            self.aeadKey = ciphersuite.kdf.expand(
+                prk: prk,
+                info: Data("key".utf8),
+                outputByteCount: ciphersuite.aead.keyByteCount
+            )
+            self.aeadNonce = Data(
+                ciphersuite.kdf.expand(
+                    prk: prk,
+                    info: Data("nonce".utf8),
+                    outputByteCount: ciphersuite.aead.nonceByteCount
+                )
+            )
             self.aead = ciphersuite.aead
             self.counter = 0
         }
 
-        public mutating func encapsulate<Message: DataProtocol>(_ message: Message, final: Bool, includeEncapsulationWrapper: Bool = false) throws -> Data {
+        public mutating func encapsulate<Message: DataProtocol>(
+            _ message: Message,
+            final: Bool,
+            includeEncapsulationWrapper: Bool = false
+        ) throws -> Data {
             // Right now we can't add the encapsulation wrapper because it is broken in the draft spec.
             precondition(includeEncapsulationWrapper == false)
 
@@ -198,34 +272,55 @@ public enum OHTTPEncapsulation {
                 self.aeadNonce.xor(with: counter)
             }
 
-            let ct = try self.aead.seal(message, authenticating: final ? finalAAD : Data(), nonce: self.aeadNonce, using: self.aeadKey)
+            let ct = try self.aead.seal(
+                message,
+                authenticating: final ? finalAAD : Data(),
+                nonce: self.aeadNonce,
+                using: self.aeadKey
+            )
 
             // This defer is here to avoid us doing it if we throw above.
             defer {
                 self.counter += 1
             }
 
-            if counter == 0 {
-                return self.responseNonce + ct
-            } else {
+            guard counter == 0 else {
                 return ct
             }
+            return self.responseNonce + ct
         }
     }
 
     public struct StreamingResponseDecapsulator {
         enum State {
-            case awaitingResponseNonce(mediaType: String, context: HPKE.Sender, ciphersuite: HPKE.Ciphersuite)
-            case responseNonceGenerated(aeadNonce: Data, aeadKey: SymmetricKey, aead: HPKE.AEAD, counter: UInt64)
+            case awaitingResponseNonce(
+                mediaType: String,
+                context: HPKE.Sender,
+                ciphersuite: HPKE.Ciphersuite
+            )
+            case responseNonceGenerated(
+                aeadNonce: Data,
+                aeadKey: SymmetricKey,
+                aead: HPKE.AEAD,
+                counter: UInt64
+            )
         }
 
         private var state: State
 
         public init(mediaType: String, context: HPKE.Sender, ciphersuite: HPKE.Ciphersuite) {
-            self.state = .awaitingResponseNonce(mediaType: mediaType, context: context, ciphersuite: ciphersuite)
+            self.state = .awaitingResponseNonce(
+                mediaType: mediaType,
+                context: context,
+                ciphersuite: ciphersuite
+            )
         }
 
-        public mutating func decapsulate<Message: DataProtocol>(_ message: Message, final: Bool, expectEncapsulationWrapper: Bool = false) throws -> Data? {
+        public mutating func decapsulate<Message: DataProtocol>(
+            _ message: Message,
+            final: Bool,
+            expectEncapsulationWrapper: Bool = false
+        ) throws -> Data? {
             // Right now we can't process the encapsulation wrapper because it is broken in the draft spec.
             precondition(expectEncapsulationWrapper == false)
 
@@ -236,39 +331,72 @@ public enum OHTTPEncapsulation {
             let ciphertext: Message.SubSequence
 
             switch self.state {
-            case .awaitingResponseNonce(mediaType: let mediaType, context: let context, ciphersuite: let ciphersuite):
+            case .awaitingResponseNonce(let mediaType, let context, let ciphersuite):
                 var payload = message[...]
                 let nonceLength = max(ciphersuite.aead.keyByteCount, ciphersuite.aead.nonceByteCount)
                 guard let responseNonce = payload.popFirst(nonceLength) else {
                     throw CryptoKitError.incorrectParameterSize
                 }
 
-                let secret = try context.exportSecret(context: Array(mediaType.utf8), outputByteCount: ciphersuite.aead.keyByteCount)
+                let secret = try context.exportSecret(
+                    context: Array(mediaType.utf8),
+                    outputByteCount: ciphersuite.aead.keyByteCount
+                )
 
                 var salt = Data(context.encapsulatedKey)
                 salt.append(contentsOf: responseNonce)
 
                 let prk = ciphersuite.kdf.extract(salt: salt, ikm: secret)
-                aeadKey = ciphersuite.kdf.expand(prk: prk, info: Data("key".utf8), outputByteCount: ciphersuite.aead.keyByteCount)
-                aeadNonce = Data(ciphersuite.kdf.expand(prk: prk, info: Data("nonce".utf8), outputByteCount: ciphersuite.aead.nonceByteCount))
+                aeadKey = ciphersuite.kdf.expand(
+                    prk: prk,
+                    info: Data("key".utf8),
+                    outputByteCount: ciphersuite.aead.keyByteCount
+                )
+                aeadNonce = Data(
+                    ciphersuite.kdf.expand(
+                        prk: prk,
+                        info: Data("nonce".utf8),
+                        outputByteCount: ciphersuite.aead.nonceByteCount
+                    )
+                )
                 aead = ciphersuite.aead
                 counter = 0
                 ciphertext = payload
 
                 // Save the state. Counter is at 1 for the next run.
-                self.state = .responseNonceGenerated(aeadNonce: aeadNonce, aeadKey: aeadKey, aead: aead, counter: 1)
-            case .responseNonceGenerated(aeadNonce: let nonce, aeadKey: let key, aead: let cipher, counter: let c):
+                self.state = .responseNonceGenerated(
+                    aeadNonce: aeadNonce,
+                    aeadKey: aeadKey,
+                    aead: aead,
+                    counter: 1
+                )
+            case .responseNonceGenerated(
+                aeadNonce: let nonce,
+                aeadKey: let key,
+                aead: let cipher,
+                counter: let c
+            ):
                 aeadNonce = nonce
                 aeadKey = key
                 aead = cipher
                 counter = c
                 ciphertext = message[...]
 
-                self.state = .responseNonceGenerated(aeadNonce: nonce, aeadKey: key, aead: cipher, counter: c + 1)
+                self.state = .responseNonceGenerated(
+                    aeadNonce: nonce,
+                    aeadKey: key,
+                    aead: cipher,
+                    counter: c + 1
+                )
             }
 
             aeadNonce.xor(with: counter)
-            return try aead.open(ciphertext, nonce: aeadNonce, authenticating: final ? finalAAD : Data(), using: aeadKey)
+            return try aead.open(
+                ciphertext,
+                nonce: aeadNonce,
+                authenticating: final ? finalAAD : Data(),
+                using: aeadKey
+            )
         }
     }
 
@@ -297,10 +425,7 @@ extension RandomAccessCollection where Element == UInt8, Self == Self.SubSequenc
 
     mutating func popUInt16() -> UInt16? {
         guard self.count >= 2 else { return nil }
-        return (
-            UInt16(self.popUInt8()!) << 8 |
-            UInt16(self.popUInt8()!)
-        )
+        return (UInt16(self.popUInt8()!) << 8 | UInt16(self.popUInt8()!))
     }
 
     mutating func popFirst(_ n: Int) -> Self? {
@@ -468,31 +593,61 @@ extension HPKE.AEAD {
         }
     }
 
-    internal func seal<D: DataProtocol, AD: DataProtocol>(_ message: D, authenticating aad: AD, nonce: Data, using key: SymmetricKey) throws -> Data {
+    internal func seal<D: DataProtocol, AD: DataProtocol>(
+        _ message: D,
+        authenticating aad: AD,
+        nonce: Data,
+        using key: SymmetricKey
+    ) throws -> Data {
         switch self {
         case .chaChaPoly:
-            return try ChaChaPoly.seal(message, using: key, nonce: ChaChaPoly.Nonce(data: nonce), authenticating: aad).combined.suffix(from: nonce.count)
+            return try ChaChaPoly.seal(
+                message,
+                using: key,
+                nonce: ChaChaPoly.Nonce(data: nonce),
+                authenticating: aad
+            ).combined.suffix(from: nonce.count)
         default:
-            return try AES.GCM.seal(message, using: key, nonce: AES.GCM.Nonce(data: nonce), authenticating: aad).combined!.suffix(from: nonce.count)
+            return try AES.GCM.seal(
+                message,
+                using: key,
+                nonce: AES.GCM.Nonce(data: nonce),
+                authenticating: aad
+            ).combined!.suffix(from: nonce.count)
         }
     }
 
-    internal func open<C: DataProtocol, AD: DataProtocol>(_ ct: C, nonce: Data, authenticating aad: AD, using key: SymmetricKey) throws -> Data {
+    internal func open<C: DataProtocol, AD: DataProtocol>(
+        _ ct: C,
+        nonce: Data,
+        authenticating aad: AD,
+        using key: SymmetricKey
+    ) throws -> Data {
         guard ct.count >= self.tagByteCount else {
             throw HPKE.Errors.expectedPSK
         }
 
         switch self {
-        case .AES_GCM_128, .AES_GCM_256: do {
-            let nonce = try AES.GCM.Nonce(data: nonce)
-            let sealedBox = try AES.GCM.SealedBox(nonce: nonce, ciphertext: ct.dropLast(16), tag: ct.suffix(16))
-            return try AES.GCM.open(sealedBox, using: key, authenticating: aad)
-        }
-        case .chaChaPoly: do {
-            let nonce = try ChaChaPoly.Nonce(data: nonce)
-            let sealedBox = try ChaChaPoly.SealedBox(nonce: nonce, ciphertext: ct.dropLast(16), tag: ct.suffix(16))
-            return try ChaChaPoly.open(sealedBox, using: key, authenticating: aad)
-        }
+        case .AES_GCM_128, .AES_GCM_256:
+            do {
+                let nonce = try AES.GCM.Nonce(data: nonce)
+                let sealedBox = try AES.GCM.SealedBox(
+                    nonce: nonce,
+                    ciphertext: ct.dropLast(16),
+                    tag: ct.suffix(16)
+                )
+                return try AES.GCM.open(sealedBox, using: key, authenticating: aad)
+            }
+        case .chaChaPoly:
+            do {
+                let nonce = try ChaChaPoly.Nonce(data: nonce)
+                let sealedBox = try ChaChaPoly.SealedBox(
+                    nonce: nonce,
+                    ciphertext: ct.dropLast(16),
+                    tag: ct.suffix(16)
+                )
+                return try ChaChaPoly.open(sealedBox, using: key, authenticating: aad)
+            }
         case .exportOnly:
             throw HPKE.Errors.exportOnlyMode
         }
@@ -547,11 +702,29 @@ extension HPKE.KDF {
     func expand(prk: SymmetricKey, info: Data, outputByteCount: Int) -> SymmetricKey {
         switch self {
         case .HKDF_SHA256:
-            return SymmetricKey(data: HKDF<SHA256>.expand(pseudoRandomKey: prk, info: info, outputByteCount: outputByteCount))
+            return SymmetricKey(
+                data: HKDF<SHA256>.expand(
+                    pseudoRandomKey: prk,
+                    info: info,
+                    outputByteCount: outputByteCount
+                )
+            )
         case .HKDF_SHA384:
-            return SymmetricKey(data: HKDF<SHA384>.expand(pseudoRandomKey: prk, info: info, outputByteCount: outputByteCount))
+            return SymmetricKey(
+                data: HKDF<SHA384>.expand(
+                    pseudoRandomKey: prk,
+                    info: info,
+                    outputByteCount: outputByteCount
+                )
+            )
         case .HKDF_SHA512:
-            return SymmetricKey(data: HKDF<SHA512>.expand(pseudoRandomKey: prk, info: info, outputByteCount: outputByteCount))
+            return SymmetricKey(
+                data: HKDF<SHA512>.expand(
+                    pseudoRandomKey: prk,
+                    info: info,
+                    outputByteCount: outputByteCount
+                )
+            )
         }
     }
 }

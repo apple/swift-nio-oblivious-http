@@ -12,9 +12,10 @@
 //
 //===----------------------------------------------------------------------===//
 import Foundation
-import XCTest
 import NIOCore
 import NIOHTTP1
+import XCTest
+
 @testable import ObliviousHTTP
 
 final class BHTTPSerializerTests: XCTestCase {
@@ -26,7 +27,7 @@ final class BHTTPSerializerTests: XCTestCase {
         ])
         let request: [HTTPClientRequestPart] = [
             .head(.init(version: .http1_1, method: .GET, uri: "/example", headers: expectedHeaders)),
-            .end(nil)
+            .end(nil),
         ]
 
         let serializer = BHTTPSerializer()
@@ -47,7 +48,7 @@ final class BHTTPSerializerTests: XCTestCase {
 
         let expectedRequest: [HTTPServerRequestPart] = [
             .head(.init(version: .http1_1, method: .GET, uri: "/example", headers: expectedHeaders)),
-            .end(nil)
+            .end(nil),
         ]
         XCTAssertEqual(expectedRequest, received)
     }
@@ -57,13 +58,13 @@ final class BHTTPSerializerTests: XCTestCase {
             ("user-agent", "curl/7.16.3 libcurl/7.16.3 OpenSSL/0.9.7l zlib/1.2.3"),
             ("host", "www.example.com"),
             ("accept-language", "en, mi"),
-            ("content-length", "5")
+            ("content-length", "5"),
         ])
         let request: [HTTPClientRequestPart] = [
             .head(.init(version: .http1_1, method: .POST, uri: "/example", headers: expectedHeaders)),
             .body(.byteBuffer(.init(string: "he"))),
             .body(.byteBuffer(.init(string: "llo"))),
-            .end(nil)
+            .end(nil),
         ]
 
         let serializer = BHTTPSerializer()
@@ -86,7 +87,7 @@ final class BHTTPSerializerTests: XCTestCase {
             .head(.init(version: .http1_1, method: .POST, uri: "/example", headers: expectedHeaders)),
             .body(.init(string: "he")),
             .body(.init(string: "llo")),
-            .end(nil)
+            .end(nil),
         ]
         XCTAssertEqual(expectedRequest, received)
     }
@@ -96,7 +97,7 @@ final class BHTTPSerializerTests: XCTestCase {
             ("user-agent", "curl/7.16.3 libcurl/7.16.3 OpenSSL/0.9.7l zlib/1.2.3"),
             ("host", "www.example.com"),
             ("accept-language", "en, mi"),
-            ("content-length", "5")
+            ("content-length", "5"),
         ])
         let expectedTrailers = HTTPHeaders([
             ("foo", "bar"),
@@ -106,7 +107,7 @@ final class BHTTPSerializerTests: XCTestCase {
             .head(.init(version: .http1_1, method: .POST, uri: "/example", headers: expectedHeaders)),
             .body(.byteBuffer(.init(string: "he"))),
             .body(.byteBuffer(.init(string: "llo"))),
-            .end(expectedTrailers)
+            .end(expectedTrailers),
         ]
 
         let serializer = BHTTPSerializer()
@@ -129,7 +130,7 @@ final class BHTTPSerializerTests: XCTestCase {
             .head(.init(version: .http1_1, method: .POST, uri: "/example", headers: expectedHeaders)),
             .body(.init(string: "he")),
             .body(.init(string: "llo")),
-            .end(expectedTrailers)
+            .end(expectedTrailers),
         ]
         XCTAssertEqual(expectedRequest, received)
     }
@@ -141,7 +142,7 @@ final class BHTTPSerializerTests: XCTestCase {
         ])
         let response: [HTTPServerResponsePart] = [
             .head(.init(version: .http1_1, status: .noContent, headers: expectedHeaders)),
-            .end(nil)
+            .end(nil),
         ]
 
         let serializer = BHTTPSerializer()
@@ -162,7 +163,7 @@ final class BHTTPSerializerTests: XCTestCase {
 
         let expectedResponse: [HTTPClientResponsePart] = [
             .head(.init(version: .http1_1, status: .noContent, headers: expectedHeaders)),
-            .end(nil)
+            .end(nil),
         ]
         XCTAssertEqual(expectedResponse, received)
     }
@@ -171,12 +172,12 @@ final class BHTTPSerializerTests: XCTestCase {
         let expectedHeaders = HTTPHeaders([
             ("server", "apache"),
             ("other-header", "its value"),
-            ("content-length", "5")
+            ("content-length", "5"),
         ])
         let response: [HTTPServerResponsePart] = [
             .head(.init(version: .http1_1, status: .noContent, headers: expectedHeaders)),
             .body(.byteBuffer(ByteBuffer(string: "hello"))),
-            .end(nil)
+            .end(nil),
         ]
 
         let serializer = BHTTPSerializer()
@@ -198,7 +199,7 @@ final class BHTTPSerializerTests: XCTestCase {
         let expectedResponse: [HTTPClientResponsePart] = [
             .head(.init(version: .http1_1, status: .noContent, headers: expectedHeaders)),
             .body(ByteBuffer(string: "hello")),
-            .end(nil)
+            .end(nil),
         ]
         XCTAssertEqual(expectedResponse, received)
     }
@@ -207,7 +208,7 @@ final class BHTTPSerializerTests: XCTestCase {
         let expectedHeaders = HTTPHeaders([
             ("server", "apache"),
             ("other-header", "its value"),
-            ("content-length", "5")
+            ("content-length", "5"),
         ])
         let expectedTrailers = HTTPHeaders([
             ("foo", "bar"),
@@ -216,7 +217,7 @@ final class BHTTPSerializerTests: XCTestCase {
         let response: [HTTPServerResponsePart] = [
             .head(.init(version: .http1_1, status: .noContent, headers: expectedHeaders)),
             .body(.byteBuffer(ByteBuffer(string: "hello"))),
-            .end(expectedTrailers)
+            .end(expectedTrailers),
         ]
 
         let serializer = BHTTPSerializer()
@@ -238,7 +239,7 @@ final class BHTTPSerializerTests: XCTestCase {
         let expectedResponse: [HTTPClientResponsePart] = [
             .head(.init(version: .http1_1, status: .noContent, headers: expectedHeaders)),
             .body(ByteBuffer(string: "hello")),
-            .end(expectedTrailers)
+            .end(expectedTrailers),
         ]
         XCTAssertEqual(expectedResponse, received)
     }
