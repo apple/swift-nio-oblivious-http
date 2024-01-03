@@ -12,8 +12,6 @@ needs to be listed here.
 ### Contributors
 
 - Cory Benfield <cbenfield@apple.com>
-- Cory Benfield <lukasa@apple.com>
-- Peter Adams <63288215+PeterAdams-A@users.noreply.github.com>
 - Peter Adams <pp_adams@apple.com>
 
 **Updating this list**
