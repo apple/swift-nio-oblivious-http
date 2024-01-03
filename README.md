@@ -1,6 +1,6 @@
 # swift-nio-oblivious-http
 
-A library for working using oblivious http with Swift-NIO.
+A library for working using Oblivious HTTP with Swift NIO.
 
 ## Overview
 
