@@ -11,6 +11,9 @@ same client also can't be identified as having originated from the same node.
 A trusted relay is used to prevent metadata being used for tracking purposes while the 
 payload is encrypted to ensure only the destination can access it.
 
+This library provides all the components required to implement Oblivious HTTP.  In the future
+an out of the box solution will exist.
+
 ## Supported Swift Versions
 
 This library was introduced with support for Swift 5.8 or later. This library will
@@ -18,6 +21,7 @@ support the latest stable Swift version and the two versions prior.
 
 ## Getting Started
 
+### Package inclusion
 To use swift-nio-oblivious-http, add the following dependency to your Package.swift:
 
 ```swift
@@ -33,3 +37,23 @@ dependencies: [
     .product(name: "ObliviousHTTP", package: "swift-nio-oblivious-http"),
 ]
 ```
+
+### Binary HTTP Encoding
+
+To serialise binary HTTP messages use `BHTTPSerializer.serialize(message, buffer)`.
+
+To deserialise binary HTTP messages use `BHTTPParser`, adding recieved data with `append()`, then calling `completeBodyRecieved()`.  The read the message parts received call `nextMessage()`.
+
+### Oblivious Encapsulation
+
+To encapsulate requests start with `OHTTPEncapsulation.encapsulateRequest()`.  Similarly for responses see `OHTTPEncapsulation.encapsulateResponse()`.
+
+To decapsulate received requests, first headers can be read with `OHTTPEncapsulation.parseRequestHeader()` Use these to enable use of `OHTTPEncapsulation.RequestDecapsulator`.  For responses see `OHTTPEncapsulation.decapsulateResponse()`.
+
+Other functionality exists to support streaming operations.
+
+## Package Structure
+
+The package is split into 2 libraries.  The headline library `OblivousHTTP` provides the binary HTTP encoding
+required to implement Oblivious HTTP.  The second library `ObliviousX` provides the Oblivious encapsulation
+which can be applied to binary HTTP or other encodings of your choice.

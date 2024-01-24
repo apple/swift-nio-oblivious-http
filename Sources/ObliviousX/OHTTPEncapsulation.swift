@@ -14,8 +14,17 @@
 import Crypto
 import Foundation
 
+/// Functionality to add oblivious HTTP style encapsulation to data messages.
 @available(macOS 14, iOS 17, *)
 public enum OHTTPEncapsulation {
+    /// Encapsulate a request messge.
+    /// - Parameters:
+    ///   - keyID: Key Id to send.
+    ///   - publicKey: Public key for the recipient.
+    ///   - ciphersuite: Details of encryption to use.
+    ///   - mediaType: Media type of the request.
+    ///   - content: The request message itself.
+    /// - Returns: Pair of encapsualted message including headers and sender for additional message encryption.
     public static func encapsulateRequest<
         PublicKey: HPKEDiffieHellmanPublicKey,
         Message: DataProtocol
@@ -37,10 +46,19 @@ public enum OHTTPEncapsulation {
         return (payload, streamer.sender)
     }
 
+    /// Stream a request in multiple chunks.
     public struct StreamingRequest {
+        /// Bytes representation of header.
         public let header: Data
+        /// Sender used to seal messages.
         public private(set) var sender: HPKE.Sender
 
+        /// Initialise
+        /// - Parameters:
+        ///   - keyID: Key Id specified.
+        ///   - publicKey: Recepients public key
+        ///   - ciphersuite: Details of encryption to use.
+        ///   - mediaType: Media type of the request.
         public init<PublicKey: HPKEDiffieHellmanPublicKey>(
             keyID: UInt8,
             publicKey: PublicKey,
@@ -57,6 +75,12 @@ public enum OHTTPEncapsulation {
             self.header = header
         }
 
+        /// Encapsulate a message chunk
+        /// - Parameters:
+        ///   - content: The message chunk to encapsulate.
+        ///   - final: Is this the last chunk.
+        ///   - includeEncapsulationWrapper: Must currently be false.
+        /// - Returns: The sealed message chunk.
         public mutating func encapsulate<Message: DataProtocol>(
             content: Message,
             final: Bool,
@@ -68,6 +92,9 @@ public enum OHTTPEncapsulation {
         }
     }
 
+    /// Parse the encapsulated request header from the start of an encapsulated request into structured types.
+    /// - Parameter encapsulatedRequest: At least enough of the encapsulated request to include the header.
+    /// - Returns: A pair of RequestHeader structure and the number of consumed bytes.
     public static func parseRequestHeader<Bytes: RandomAccessCollection>(
         encapsulatedRequest: Bytes
     )
@@ -99,25 +126,40 @@ public enum OHTTPEncapsulation {
         return (decapsulator, 7 + kem.encapsulatedKeySize)
     }
 
+    /// Encapsulated request header.
     public struct RequestHeader {
+        /// Key Id specified.
         public private(set) var keyID: UInt8
 
+        /// Key encapsulation mechanism
         public private(set) var kem: HPKE.KEM
 
+        /// Key derivation function.
         public private(set) var kdf: HPKE.KDF
 
+        /// The authenticated encryption with associated data (AEAD) algorithms to use.
         public private(set) var aead: HPKE.AEAD
 
+        /// Bytes representation of header fields (not key)
         public private(set) var headerBytes: Data
 
+        /// Bytes representation of the encapsulated key.
         public private(set) var encapsulatedKey: Data
     }
 
+    /// Functionality to remove oblivious encapsulation from a series of request chunks.
     public struct StreamingRequestDecapsulator {
+        /// The request header.
         public private(set) var header: RequestHeader
 
+        /// Message recipient.
         public private(set) var recipient: HPKE.Recipient
 
+        /// Initialise, preparing to remove oblivious encapsulation.
+        /// - Parameters:
+        ///   - requestHeader: Header of this request.
+        ///   - mediaType: Media type specified for request.
+        ///   - privateKey: Private key for removing encryption.
         public init<PrivateKey: HPKEDiffieHellmanPrivateKey>(
             requestHeader: RequestHeader,
             mediaType: String,
@@ -137,6 +179,12 @@ public enum OHTTPEncapsulation {
             )
         }
 
+        /// Remove encapsulation from a message
+        /// - Parameters:
+        ///   - content: The message chunk to remove encapsulation from.
+        ///   - final: Is this the final chunk.
+        ///   - includeEncapsulationWrapper: Currently must be false.
+        /// - Returns: Decrypted content.
         public mutating func decapsulate<Message: DataProtocol>(
             content: Message,
             final: Bool,
@@ -149,6 +197,14 @@ public enum OHTTPEncapsulation {
         }
     }
 
+    /// Add oblivious encapsulation to a response message.
+    /// - Parameters:
+    ///   - context: The recipient for this message.
+    ///   - encapsulatedKey: Encapsulated key from messge header.
+    ///   - mediaType: Media type for the content.
+    ///   - ciphersuite: Details of encryption to use.
+    ///   - content: Message content.
+    /// - Returns: The encapsulated content
     public static func encapsulateResponse<
         Message: DataProtocol,
         EncapsulatedKey: RandomAccessCollection
@@ -168,6 +224,13 @@ public enum OHTTPEncapsulation {
         return try streamingResponse.encapsulate(content, final: false)
     }
 
+    /// Remove encapsulation from a response message.
+    /// - Parameters:
+    ///   - responsePayload: The payload to decrypt
+    ///   - mediaType: Payload media type
+    ///   - context: The sender of this payload
+    ///   - ciphersuite: Details of encryption used.
+    /// - Returns: Decrypted payload.
     public static func decapsulateResponse<ResponsePayload: DataProtocol>(
         responsePayload: ResponsePayload,
         mediaType: String,
@@ -184,17 +247,29 @@ public enum OHTTPEncapsulation {
         return try streamingDecapsulator.decapsulate(responsePayload, final: false)!
     }
 
+    /// Removes oblivious encapsulation from a request message.
     public struct RequestDecapsulator<Bytes: RandomAccessCollection & DataProtocol>
     where Bytes.Element == UInt8, Bytes.SubSequence == Bytes {
+        /// The header for this request.
         public private(set) var header: RequestHeader
 
+        /// The encapsulated request.
         public private(set) var message: Bytes
 
+        /// Initialise a new request decapsulator
+        /// - Parameters:
+        ///   - requestHeader: The header for the request.
+        ///   - message: The request itself
         public init(requestHeader: RequestHeader, message: Bytes) {
             self.header = requestHeader
             self.message = message
         }
 
+        /// Remove oblivious encapsulation
+        /// - Parameters:
+        ///   - mediaType: Media type that was specified when encapsulating
+        ///   - privateKey: Private key for removing encryption.
+        /// - Returns: Decrypted message data and recipient details.
         public func decapsulate<PrivateKey: HPKEDiffieHellmanPrivateKey>(
             mediaType: String,
             privateKey: PrivateKey
@@ -209,6 +284,7 @@ public enum OHTTPEncapsulation {
         }
     }
 
+    /// Processor for a series of response chunks.
     public struct StreamingResponse {
         private let responseNonce: Data
 
@@ -220,6 +296,12 @@ public enum OHTTPEncapsulation {
 
         private var counter: UInt64
 
+        /// Initialiser.
+        /// - Parameters:
+        ///   - context: The message recipient.
+        ///   - encapsulatedKey:  Encapsulated key for cypher
+        ///   - mediaType: Media type
+        ///   - ciphersuite: Details of encryption to use.
         public init<EncapsulatedKey: RandomAccessCollection>(
             context: HPKE.Recipient,
             encapsulatedKey: EncapsulatedKey,
@@ -256,6 +338,12 @@ public enum OHTTPEncapsulation {
             self.counter = 0
         }
 
+        /// Encapsulate a message chunk
+        /// - Parameters:
+        ///   - message: The message chunk to encapsulate.
+        ///   - final: Is this the final message chunk.
+        ///   - includeEncapsulationWrapper: Must currently be false
+        /// - Returns: The encapsulated message chunk.
         public mutating func encapsulate<Message: DataProtocol>(
             _ message: Message,
             final: Bool,
@@ -291,6 +379,7 @@ public enum OHTTPEncapsulation {
         }
     }
 
+    /// Decapsulator which can process a response as a series of chunks.
     public struct StreamingResponseDecapsulator {
         enum State {
             case awaitingResponseNonce(
@@ -308,6 +397,11 @@ public enum OHTTPEncapsulation {
 
         private var state: State
 
+        /// initialiser.
+        /// - Parameters:
+        ///   - mediaType: Media type of the response.
+        ///   - context: The sender of the response.
+        ///   - ciphersuite: Details of encryption used.
         public init(mediaType: String, context: HPKE.Sender, ciphersuite: HPKE.Ciphersuite) {
             self.state = .awaitingResponseNonce(
                 mediaType: mediaType,
@@ -316,6 +410,12 @@ public enum OHTTPEncapsulation {
             )
         }
 
+        /// Decapsulate a message chunk
+        /// - Parameters:
+        ///   - message: The message chunk.
+        ///   - final: Is this the final chunk of the sequence?
+        ///   - expectEncapsulationWrapper: Must currently be false.
+        /// - Returns: The decrypted payload data for this chunk.
         public mutating func decapsulate<Message: DataProtocol>(
             _ message: Message,
             final: Bool,
