@@ -21,7 +21,7 @@ public enum OHTTPEncapsulation {
     /// - Parameters:
     ///   - keyID: Key Id to send.
     ///   - publicKey: Public key for the recipient.
-    ///   - ciphersuite: Details of encryption to use.
+    ///   - ciphersuite: HPKE ciphersuite to use.
     ///   - mediaType: Media type of the request.
     ///   - content: The request message itself.
     /// - Returns: Pair of encapsulated message including headers and sender for additional message encryption.
@@ -57,7 +57,7 @@ public enum OHTTPEncapsulation {
         /// - Parameters:
         ///   - keyID: Key Id specified.
         ///   - publicKey: Recepients public key
-        ///   - ciphersuite: Details of encryption to use.
+        ///   - ciphersuite: HPKE ciphersuite to use.
         ///   - mediaType: Media type of the request.
         public init<PublicKey: HPKEDiffieHellmanPublicKey>(
             keyID: UInt8,
@@ -159,7 +159,7 @@ public enum OHTTPEncapsulation {
         /// - Parameters:
         ///   - requestHeader: Header of this request.
         ///   - mediaType: Media type specified for request.
-        ///   - privateKey: Private key for removing encryption.
+        ///   - privateKey: Private key to which messages will have been encrypted.
         public init<PrivateKey: HPKEDiffieHellmanPrivateKey>(
             requestHeader: RequestHeader,
             mediaType: String,
@@ -202,7 +202,7 @@ public enum OHTTPEncapsulation {
     ///   - context: The recipient for this message.
     ///   - encapsulatedKey: Encapsulated key from messge header.
     ///   - mediaType: Media type for the content.
-    ///   - ciphersuite: Details of encryption to use.
+    ///   - ciphersuite: HPKE ciphersuite to use.
     ///   - content: Message content.
     /// - Returns: The encapsulated content
     public static func encapsulateResponse<
@@ -229,7 +229,7 @@ public enum OHTTPEncapsulation {
     ///   - responsePayload: The payload to decrypt
     ///   - mediaType: Payload media type
     ///   - context: The sender of this payload
-    ///   - ciphersuite: Details of encryption used.
+    ///   - ciphersuite: HPKE ciphersuite to use.
     /// - Returns: Decrypted payload.
     public static func decapsulateResponse<ResponsePayload: DataProtocol>(
         responsePayload: ResponsePayload,
@@ -268,7 +268,7 @@ public enum OHTTPEncapsulation {
         /// Remove oblivious encapsulation
         /// - Parameters:
         ///   - mediaType: Media type that was specified when encapsulating
-        ///   - privateKey: Private key for removing encryption.
+        ///   - privateKey: Private key to which the message will have been encrypted.
         /// - Returns: Decrypted message data and recipient details.
         public func decapsulate<PrivateKey: HPKEDiffieHellmanPrivateKey>(
             mediaType: String,
@@ -299,9 +299,9 @@ public enum OHTTPEncapsulation {
         /// Initialiser.
         /// - Parameters:
         ///   - context: The message recipient.
-        ///   - encapsulatedKey:  Encapsulated key for cypher
+        ///   - encapsulatedKey:  Encapsulated key for AEAD.
         ///   - mediaType: Media type
-        ///   - ciphersuite: Details of encryption to use.
+        ///   - ciphersuite: HPKE ciphersuite to use.
         public init<EncapsulatedKey: RandomAccessCollection>(
             context: HPKE.Recipient,
             encapsulatedKey: EncapsulatedKey,
@@ -401,7 +401,7 @@ public enum OHTTPEncapsulation {
         /// - Parameters:
         ///   - mediaType: Media type of the response.
         ///   - context: The sender of the response.
-        ///   - ciphersuite: Details of encryption used.
+        ///   - ciphersuite: HPKE ciphersuite to use.
         public init(mediaType: String, context: HPKE.Sender, ciphersuite: HPKE.Ciphersuite) {
             self.state = .awaitingResponseNonce(
                 mediaType: mediaType,

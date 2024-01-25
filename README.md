@@ -11,8 +11,8 @@ same client also can't be identified as having originated from the same node.
 A trusted relay is used to prevent metadata being used for tracking purposes while the 
 payload is encrypted to ensure only the destination can access it.
 
-This library provides all the components required to implement Oblivious HTTP.  In the future
-an out of the box solution will exist.
+This library provides all the components required to implement Oblivious HTTP.  We intend to extend
+this project to provide out-of-box solutions compatible with swift-nio.
 
 ## Supported Swift Versions
 
