@@ -11,6 +11,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 //===----------------------------------------------------------------------===//
+
+/// An error occured when adding oblivious encapsulation.
 public struct ObliviousXError: Error, Hashable {
     private var backing: Backing
 
@@ -18,6 +20,8 @@ public struct ObliviousXError: Error, Hashable {
         self.backing = backing
     }
 
+    /// Create an error indicating that the HPKE parameters given were not supported.
+    /// - Returns: An Error representing this failure.
     @inline(never)
     public static func unsupportedHPKEParameters() -> ObliviousXError {
         return Self.init(backing: .unsupportedHPKEParameters)

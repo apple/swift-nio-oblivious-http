@@ -19,9 +19,16 @@ import NIOHTTP1
 // it wrong.
 //
 // Later optimizations can be made by adding more state into this type.
+/// Binary HTTP serialiser as described in [RFC9292](https://www.rfc-editor.org/rfc/rfc9292).
+/// Currently only indeterminate-length encoding is supported.
 public struct BHTTPSerializer {
+    /// Initialise a Binary HTTP Serialiser.
     public init() {}
 
+    /// Serialise a message into a buffer using binary HTTP encoding.
+    /// - Parameters:
+    ///   - message: The message to serialise.  File regions are currently not supported.
+    ///   - buffer: Destination buffer to serialise into.
     public func serialize(_ message: Message, into buffer: inout ByteBuffer) {
         switch message {
         case .request(.head(let requestHead)):
@@ -88,8 +95,11 @@ public struct BHTTPSerializer {
 }
 
 extension BHTTPSerializer {
+    /// Types of message for binary http serilaisation
     public enum Message {
+        /// Part of an HTTP request.
         case request(HTTPClientRequestPart)
+        /// Part of an HTTP response.
         case response(HTTPServerResponsePart)
     }
 }

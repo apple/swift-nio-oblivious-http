@@ -14,12 +14,15 @@
 import NIOCore
 import NIOHTTP1
 
+/// Binary HTTP parser as described in [RFC9292](https://www.rfc-editor.org/rfc/rfc9292).
 public struct BHTTPParser {
     private var buffer: ByteBuffer?
     private var state: State
     private var role: Role
     private var readEOF: Bool
 
+    /// Initialises a Binary HTTP parser.
+    /// - Parameter role: Which of client or server roles is being assumed.
     public init(role: Role) {
         self.buffer = nil
         self.state = .idle
@@ -27,14 +30,20 @@ public struct BHTTPParser {
         self.readEOF = false
     }
 
+    /// Append more data to that which will be parsed.
+    /// - Parameter buffer: Buffer containing data to parse.
     public mutating func append(_ buffer: ByteBuffer) {
         self.buffer.setOrWriteImmutableBuffer(buffer)
     }
 
+    /// Call to indicate that the entire body of the message has been recieved.
     public mutating func completeBodyReceived() {
         self.readEOF = true
     }
 
+    /// Get the next HTTP message part parsed from the data.  If there is insufficent data
+    /// available and no more is expected this method will throw.
+    /// - Returns: The message part or nil if there is insufficient data available at this time.
     public mutating func nextMessage() throws -> Message? {
         while true {
             let parseResult: ParseResult
@@ -437,6 +446,7 @@ extension BHTTPParser {
         }
     }
 
+    /// Role to assume when parsing binary HTTP
     public enum Role {
         case client
         case server
@@ -460,6 +470,7 @@ extension BHTTPParser {
         }
     }
 
+    /// Part of overall HTTP request or response.
     public enum Message {
         case request(HTTPServerRequestPart)
         case response(HTTPClientResponsePart)
