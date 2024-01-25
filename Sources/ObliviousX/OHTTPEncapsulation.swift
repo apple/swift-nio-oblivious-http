@@ -24,7 +24,7 @@ public enum OHTTPEncapsulation {
     ///   - ciphersuite: Details of encryption to use.
     ///   - mediaType: Media type of the request.
     ///   - content: The request message itself.
-    /// - Returns: Pair of encapsualted message including headers and sender for additional message encryption.
+    /// - Returns: Pair of encapsulated message including headers and sender for additional message encryption.
     public static func encapsulateRequest<
         PublicKey: HPKEDiffieHellmanPublicKey,
         Message: DataProtocol
