@@ -4,7 +4,7 @@ A library for working using Oblivious HTTP with Swift NIO.
 
 ## Overview
 
-Oblivous HTTP is a protocol to allow a client to make requests of a server without the 
+Oblivious HTTP is a protocol to allow a client to make requests of a server without the 
 server being able to identify the source of those requests.  Multiple requests from the 
 same client also can't be identified as having originated from the same node.
 
@@ -42,7 +42,7 @@ dependencies: [
 
 To serialise binary HTTP messages use `BHTTPSerializer.serialize(message, buffer)`.
 
-To deserialise binary HTTP messages use `BHTTPParser`, adding recieved data with `append()`, then calling `completeBodyRecieved()`.  The read the message parts received call `nextMessage()`.
+To deserialise binary HTTP messages use `BHTTPParser`, adding received data with `append()`, then calling `completeBodyRecieved()`.  The read the message parts received call `nextMessage()`.
 
 ### Oblivious Encapsulation
 
