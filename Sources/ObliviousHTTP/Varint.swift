@@ -51,7 +51,7 @@ extension ByteBuffer {
 
     @discardableResult
     mutating func writeVarint(_ value: Int) -> Int {
-        switch value {
+        switch Int64(value) {
         case 0..<63:
             // Easy, store the value. The top two bits are 0 so we don't need to do any masking.
             return self.writeInteger(UInt8(truncatingIfNeeded: value))
