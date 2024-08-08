@@ -1,5 +1,11 @@
 # swift-nio-oblivious-http
 
+
+[![](https://img.shields.io/badge/docc-read_documentation-blue)](https://swiftpackageindex.com/apple/swift-nio-oblivious-http/documentation)
+[![](https://img.shields.io/github/v/release/apple/swift-nio-oblivious-http)](https://github.com/apple/swift-nio-oblivious-http/releases)
+[![](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Fapple%2Fswift-nio-oblivious-http%2Fbadge%3Ftype%3Dswift-versions)](https://swiftpackageindex.com/apple/swift-nio-oblivious-http)
+[![](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Fapple%2Fswift-nio-oblivious-http%2Fbadge%3Ftype%3Dplatforms)](https://swiftpackageindex.com/apple/swift-nio-oblivious-http)
+
 A library for working using Oblivious HTTP with Swift NIO.
 
 ## Overview
