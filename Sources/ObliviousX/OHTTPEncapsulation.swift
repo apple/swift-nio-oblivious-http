@@ -520,7 +520,7 @@ public enum OHTTPEncapsulation {
 
 extension RandomAccessCollection where Element == UInt8, Self == Self.SubSequence {
     mutating func popUInt8() -> UInt8? {
-        return self.popFirst()
+        self.popFirst()
     }
 
     mutating func popUInt16() -> UInt16? {
@@ -759,19 +759,19 @@ private let protocolLabel = Data("HPKE-v1".utf8)
 
 extension HPKE.KEM {
     internal var identifier: Data {
-        return I2OSP(value: Int(UInt16(networkIdentifier: self)), outputByteCount: 2)
+        I2OSP(value: Int(UInt16(networkIdentifier: self)), outputByteCount: 2)
     }
 }
 
 extension HPKE.KDF {
     internal var identifier: Data {
-        return I2OSP(value: Int(UInt16(networkIdentifier: self)), outputByteCount: 2)
+        I2OSP(value: Int(UInt16(networkIdentifier: self)), outputByteCount: 2)
     }
 }
 
 extension HPKE.AEAD {
     internal var identifier: Data {
-        return I2OSP(value: Int(UInt16(networkIdentifier: self)), outputByteCount: 2)
+        I2OSP(value: Int(UInt16(networkIdentifier: self)), outputByteCount: 2)
     }
 }
 
