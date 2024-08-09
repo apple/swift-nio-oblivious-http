@@ -25,7 +25,7 @@ public struct ObliviousHTTPError: Error, Hashable {
     /// - Returns: An Error representing this failure,
     @inline(never)
     public static func invalidFramingIndicator(_ indicator: Int) -> ObliviousHTTPError {
-        return Self.init(backing: .invalidFramingIndicator(indicator))
+        Self.init(backing: .invalidFramingIndicator(indicator))
     }
 
     /// Create a error indicating that parsing failed when parsing the field section due to unexpected data.
@@ -33,7 +33,7 @@ public struct ObliviousHTTPError: Error, Hashable {
     /// - Returns: An Error representing this failure.
     @inline(never)
     public static func invalidFieldSection(reason: String) -> ObliviousHTTPError {
-        return Self.init(backing: .invalidFieldSection(reason: reason))
+        Self.init(backing: .invalidFieldSection(reason: reason))
     }
 
     /// Create an error indicating that parsing failed due to insufficient data.
@@ -41,7 +41,7 @@ public struct ObliviousHTTPError: Error, Hashable {
     /// - Returns: An Error repesenting this failure.
     @inline(never)
     public static func truncatedEncoding(reason: String) -> ObliviousHTTPError {
-        return Self.init(backing: .truncatedEncoding(reason: reason))
+        Self.init(backing: .truncatedEncoding(reason: reason))
     }
 
     /// Create an error indicating that parsing faileud due to an unexpected HTTP status code.
@@ -49,7 +49,7 @@ public struct ObliviousHTTPError: Error, Hashable {
     /// - Returns: An Error representing this failure.
     @inline(never)
     public static func invalidStatus(status: Int) -> ObliviousHTTPError {
-        return Self.init(backing: .invalidStatus(status: status))
+        Self.init(backing: .invalidStatus(status: status))
     }
 }
 
