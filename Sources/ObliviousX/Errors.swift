@@ -24,7 +24,7 @@ public struct ObliviousXError: Error, Hashable {
     /// - Returns: An Error representing this failure.
     @inline(never)
     public static func unsupportedHPKEParameters() -> ObliviousXError {
-        return Self.init(backing: .unsupportedHPKEParameters)
+        Self.init(backing: .unsupportedHPKEParameters)
     }
 }
 

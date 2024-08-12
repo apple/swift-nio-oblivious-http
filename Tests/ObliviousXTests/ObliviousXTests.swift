@@ -303,7 +303,7 @@ final class ObliviousXTests: XCTestCase {
             Data("At the sound of the bell, the time will be \(count) PM.".utf8)
         }
         var encapsulatedMessages: [Data] = try messages.dropLast().map { message in
-            return try responseEncapsulator.encapsulate(message, final: false)
+            try responseEncapsulator.encapsulate(message, final: false)
         }
         encapsulatedMessages.append(try responseEncapsulator.encapsulate(messages.last!, final: true))
 
@@ -451,7 +451,7 @@ final class ObliviousXTests: XCTestCase {
             Data("At the sound of the bell, the time will be \(count) PM.".utf8)
         }
         var encapsulatedMessages: [Data] = try messages.dropLast().map { message in
-            return try responseEncapsulator.encapsulate(message, final: false)
+            try responseEncapsulator.encapsulate(message, final: false)
         }
         encapsulatedMessages.append(try responseEncapsulator.encapsulate(messages.last!, final: true))
 
@@ -508,7 +508,7 @@ final class ObliviousXTests: XCTestCase {
             Data("At the sound of the bell, the time will be \(count) PM.".utf8)
         }
         let encapsulatedMessages: [Data] = try messages.map { message in
-            return try responseEncapsulator.encapsulate(message, final: false)
+            try responseEncapsulator.encapsulate(message, final: false)
         }
 
         let decapsulated: [Data] = try encapsulatedMessages.dropLast().map { message in
