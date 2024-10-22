@@ -9,15 +9,8 @@ jobs:
     name: Soundness
     uses: swiftlang/github-workflows/.github/workflows/soundness.yml@main
     with:
-      license_header_check_project_name: "SwiftCrypto"
+      license_header_check_project_name: "SwiftNIO"
       format_check_enabled: false
-
-  cmake-lists:
-    name: Check cmake lists
-    uses: apple/swift-nio/.github/workflows/swift_matrix.yml@main
-    with:
-      name: "Check cmake lists"
-      matrix_linux_command: ./scripts/check-cmake-lists.sh
 
   unit-tests:
     name: Unit tests
