@@ -21,15 +21,17 @@ let package = Package(
         .macOS("14"),
         .iOS("17"),
         .tvOS("17"),
-        .watchOS("10")
+        .watchOS("10"),
     ],
     products: [
         .library(
             name: "ObliviousHTTP",
-            targets: ["ObliviousHTTP"]),
+            targets: ["ObliviousHTTP"]
+        ),
         .library(
             name: "ObliviousX",
-            targets: ["ObliviousX"]),
+            targets: ["ObliviousX"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.54.0"),
@@ -41,12 +43,14 @@ let package = Package(
             dependencies: [
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
-            ]),
+            ]
+        ),
         .target(
             name: "ObliviousX",
             dependencies: [
-                .product(name: "Crypto", package: "swift-crypto"),
-            ]),
+                .product(name: "Crypto", package: "swift-crypto")
+            ]
+        ),
         .testTarget(
             name: "ObliviousHTTPTests",
             dependencies: [
