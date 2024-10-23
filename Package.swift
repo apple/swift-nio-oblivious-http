@@ -66,6 +66,6 @@ let package = Package(
                 "ObliviousX",
                 .product(name: "Crypto", package: "swift-crypto"),
             ]
-        )
+        ),
     ]
 )
