@@ -47,8 +47,9 @@ dependencies: [
 ### Binary HTTP Encoding
 
 To serialise binary HTTP messages use `BHTTPSerializer.serialize(message, buffer)`.
+As defined in [RFC9292](https://www.rfc-editor.org/rfc/rfc9292),  you can choose to use either the known-length format or an indeterminate-length format. This choice can be configured during the initialization of the serializer by passing the desired type: `BHTTPSerializer(type: .knownLength)`.
 
-To deserialise binary HTTP messages use `BHTTPParser`, adding received data with `append()`, then calling `completeBodyRecieved()`.  The read the message parts received call `nextMessage()`.
+To deserialise binary HTTP messages use `BHTTPParser`, adding received data with `append()`, then calling `completeBodyReceived()`.  The read the message parts received call `nextMessage()`.
 
 ### Oblivious Encapsulation
 
