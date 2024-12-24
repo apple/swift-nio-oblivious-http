@@ -29,7 +29,6 @@ final class BHTTPSerializerTests: XCTestCase {
             .head(.init(version: .http1_1, method: .GET, uri: "/example", headers: expectedHeaders)),
             .end(nil),
         ]
-
         var buffer = ByteBuffer()
         var serializer = BHTTPSerializer()
         var parser = BHTTPParser(role: .server)
@@ -310,7 +309,7 @@ final class BHTTPSerializerTests: XCTestCase {
         let expectedRequest: [HTTPServerRequestPart] = [
             .head(.init(version: .http1_1, method: .POST, uri: "/example", headers: expectedHeaders)),
             .body(.init(string: "hello")),
-            .end(expectedTrailers)
+            .end(expectedTrailers),
         ]
         XCTAssertEqual(expectedRequest, received)
     }
@@ -423,7 +422,6 @@ final class BHTTPSerializerTests: XCTestCase {
         XCTAssertEqual(expectedResponse, received)
     }
 
-
     func testSimple200ResponseWithBodyAndTrailersRoundTripsAndKnownLengthSerializer() throws {
         let expectedHeaders = HTTPHeaders([
             ("server", "apache"),
@@ -438,7 +436,7 @@ final class BHTTPSerializerTests: XCTestCase {
             .head(.init(version: .http1_1, status: .noContent, headers: expectedHeaders)),
             .body(.byteBuffer(ByteBuffer(string: "hello"))),
             .end(expectedTrailers),
-            .end(nil)
+            .end(nil),
         ]
 
         var buffer = ByteBuffer()

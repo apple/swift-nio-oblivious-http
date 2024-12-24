@@ -23,6 +23,9 @@ public struct BHTTPSerializer {
     private var fieldSectionBuffer: ByteBuffer
 
     /// Initialise a Binary HTTP Serialiser.
+    /// - Parameters:
+    ///   - type: The type of BHTTPSerializer you want: either known or indeterminate length.
+    ///   - allocator: Byte buffer allocator used.
     public init(
         type: BHTTPSerializerType = .indeterminateLength,
         allocator: ByteBufferAllocator = ByteBufferAllocator()
@@ -201,9 +204,8 @@ extension BHTTPSerializer {
             .HEADER: [.CHUNK, .TRAILERS],
             .CHUNK: [.TRAILERS, .END],
             .TRAILERS: [.END],
-            .END: [] 
+            .END: [],
         ]
-
 
         // Ensure that the current state is one of the allowed states.
         func ensureState(_ allowedStates: [BHTTPSerializerState]) throws {
