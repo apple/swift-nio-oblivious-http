@@ -18,7 +18,7 @@ import NIOHTTP1
 public struct BHTTPSerializer {
 
     private var fsm: BHTTPSerializerFSM
-    private var type: BHTTPSerializerType
+    private var type: SerializerType
     private var chunkBuffer: ByteBuffer
     private var fieldSectionBuffer: ByteBuffer
 
@@ -27,7 +27,7 @@ public struct BHTTPSerializer {
     ///   - type: The type of BHTTPSerializer you want: either known or indeterminate length.
     ///   - allocator: Byte buffer allocator used.
     public init(
-        type: BHTTPSerializerType = .indeterminateLength,
+        type: SerializerType = .indeterminateLength,
         allocator: ByteBufferAllocator = ByteBufferAllocator()
     ) {
         self.type = type
@@ -55,10 +55,11 @@ public struct BHTTPSerializer {
         case .request(.body(.byteBuffer(let body))), .response(.body(.byteBuffer(let body))):
             try self.fsm.ensureState([BHTTPSerializerState.CHUNK])
             switch self.type {
-            case .indeterminateLength:
-                Self.serializeContentChunk(body, into: &buffer)
             case .knownLength:
                 self.stackContentChunk(body)
+                break
+            default:
+                Self.serializeContentChunk(body, into: &buffer)
             }
 
         case .request(.body(.fileRegion)), .response(.body(.fileRegion)):
@@ -67,24 +68,26 @@ public struct BHTTPSerializer {
         case .request(.end(.some(let trailers))), .response(.end(.some(let trailers))):
             try self.fsm.ensureState([BHTTPSerializerState.CHUNK, BHTTPSerializerState.HEADER])
             switch self.type {
-            case .indeterminateLength:
-                // Send a 0 to terminate the body, then a field section.
-                buffer.writeInteger(UInt8(0))
-                Self.serializeIndeterminateLengthFieldSection(trailers, into: &buffer)
             case .knownLength:
                 self.serializeContent(into: &buffer)
                 self.stackKnownLengthFieldSection(trailers)
+                break
+            default:
+                // Send a 0 to terminate the body, then a field section.
+                buffer.writeInteger(UInt8(0))
+                Self.serializeIndeterminateLengthFieldSection(trailers, into: &buffer)
             }
             try self.fsm.transition(to: BHTTPSerializerState.TRAILERS)
 
         case .request(.end(.none)), .response(.end(.none)):
             try self.fsm.ensureState([BHTTPSerializerState.CHUNK, BHTTPSerializerState.TRAILERS])
             switch self.type {
-            case .indeterminateLength:
-                buffer.writeInteger(UInt8(0))
             case .knownLength:
                 self.serializeContent(into: &buffer)
                 self.serializeKnownLengthFieldSection(into: &buffer)
+                break
+            default:
+                buffer.writeInteger(UInt8(0))
             }
             try self.fsm.transition(to: BHTTPSerializerState.END)
         }
@@ -109,11 +112,12 @@ public struct BHTTPSerializer {
         buffer.writeVarintPrefixedString(path)
 
         switch self.type {
-        case .indeterminateLength:
-            Self.serializeIndeterminateLengthFieldSection(head.headers, into: &buffer)
         case .knownLength:
             self.stackKnownLengthFieldSection(head.headers)
             self.serializeKnownLengthFieldSection(into: &buffer)
+            break
+        default:
+            Self.serializeIndeterminateLengthFieldSection(head.headers, into: &buffer)
         }
     }
 
@@ -128,11 +132,12 @@ public struct BHTTPSerializer {
         buffer.writeVarint(Int(head.status.code))
 
         switch self.type {
-        case .indeterminateLength:
-            Self.serializeIndeterminateLengthFieldSection(head.headers, into: &buffer)
         case .knownLength:
             self.stackKnownLengthFieldSection(head.headers)
             self.serializeKnownLengthFieldSection(into: &buffer)
+            break
+        default:
+            Self.serializeIndeterminateLengthFieldSection(head.headers, into: &buffer)
         }
     }
 
@@ -220,9 +225,24 @@ extension BHTTPSerializer {
         case response(HTTPServerResponsePart)
     }
 
-    public enum BHTTPSerializerType {
-        case knownLength
-        case indeterminateLength
+    public struct SerializerType: Equatable {
+        private enum InternalType: Equatable {
+            case knownLength
+            case indeterminateLength
+        }
+
+        private let type: InternalType
+
+        public static let knownLength = SerializerType(type: .knownLength)
+        public static let indeterminateLength = SerializerType(type: .indeterminateLength)
+
+        private init(type: InternalType) {
+            self.type = type
+        }
+
+        public static func == (lop: SerializerType, rop: SerializerType) -> Bool {
+            lop.type == rop.type
+        }
     }
 
     public enum BHTTPFramingIndicator: Int {
