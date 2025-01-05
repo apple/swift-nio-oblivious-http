@@ -56,8 +56,8 @@ public struct ObliviousHTTPError: Error, Hashable {
     /// - Parameter state: The state encountered.
     /// - Returns: An Error representing this failure.
     @inline(never)
-    public static func unexpectedHTTPMessageSection(state: String) -> ObliviousHTTPError {
-        Self.init(backing: .unexpectedHTTPMessageSection(state: "\(state) section was not expected."))
+    public static func unexpectedHTTPMessageSection() -> ObliviousHTTPError {
+        Self.init(backing: .unexpectedHTTPMessageSection(state: "An unexpected HTTP message section was encountered."))
     }
 
     /// Create an error indicating that serializing failed due to an unsupported option.

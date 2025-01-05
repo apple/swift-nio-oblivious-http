@@ -33,7 +33,25 @@ public struct BHTTPSerializer {
         self.type = type
         self.chunkBuffer = allocator.buffer(capacity: 0)
         self.fieldSectionBuffer = allocator.buffer(capacity: 0)
-        self.fsm = BHTTPSerializerFSM(initialState: BHTTPSerializerState.HEADER)
+        self.fsm = BHTTPSerializerFSM(initialState: BHTTPSerializerState.start)
+    }
+
+    private var requestFramingIndicator: Int {
+        switch self.type {
+        case .knownLength:
+            return FramingIndicator.requestKnownLength
+        default:
+            return FramingIndicator.requestIndeterminateLength
+        }
+    }
+
+    private var responseFramingIndicator: Int {
+        switch self.type {
+        case .knownLength:
+            return FramingIndicator.responseKnownLength
+        default:
+            return FramingIndicator.responseIndeterminateLength
+        }
     }
 
     /// Serialise a message into a buffer using binary HTTP encoding.
@@ -43,17 +61,14 @@ public struct BHTTPSerializer {
     public mutating func serialize(_ message: Message, into buffer: inout ByteBuffer) throws {
         switch message {
         case .request(.head(let requestHead)):
-            try self.fsm.ensureState([BHTTPSerializerState.HEADER])
             self.serializeRequestHead(requestHead, into: &buffer)
-            try self.fsm.transition(to: BHTTPSerializerState.CHUNK)
+            try self.fsm.transition(to: BHTTPSerializerState.header)
 
         case .response(.head(let responseHead)):
-            try self.fsm.ensureState([BHTTPSerializerState.HEADER])
             self.serializeResponseHead(responseHead, into: &buffer)
-            try self.fsm.transition(to: BHTTPSerializerState.CHUNK)
+            try self.fsm.transition(to: BHTTPSerializerState.header)
 
         case .request(.body(.byteBuffer(let body))), .response(.body(.byteBuffer(let body))):
-            try self.fsm.ensureState([BHTTPSerializerState.CHUNK])
             switch self.type {
             case .knownLength:
                 self.stackContentChunk(body)
@@ -61,12 +76,12 @@ public struct BHTTPSerializer {
             default:
                 Self.serializeContentChunk(body, into: &buffer)
             }
+            try self.fsm.transition(to: BHTTPSerializerState.chunk)
 
         case .request(.body(.fileRegion)), .response(.body(.fileRegion)):
             throw ObliviousHTTPError.unsupportedOption(reason: "fileregion unsupported")
 
         case .request(.end(.some(let trailers))), .response(.end(.some(let trailers))):
-            try self.fsm.ensureState([BHTTPSerializerState.CHUNK, BHTTPSerializerState.HEADER])
             switch self.type {
             case .knownLength:
                 self.serializeContent(into: &buffer)
@@ -77,10 +92,10 @@ public struct BHTTPSerializer {
                 buffer.writeInteger(UInt8(0))
                 Self.serializeIndeterminateLengthFieldSection(trailers, into: &buffer)
             }
-            try self.fsm.transition(to: BHTTPSerializerState.TRAILERS)
+            try self.fsm.transition(to: BHTTPSerializerState.trailers)
+
 
         case .request(.end(.none)), .response(.end(.none)):
-            try self.fsm.ensureState([BHTTPSerializerState.CHUNK, BHTTPSerializerState.TRAILERS])
             switch self.type {
             case .knownLength:
                 self.serializeContent(into: &buffer)
@@ -89,17 +104,13 @@ public struct BHTTPSerializer {
             default:
                 buffer.writeInteger(UInt8(0))
             }
-            try self.fsm.transition(to: BHTTPSerializerState.END)
+            try self.fsm.transition(to: BHTTPSerializerState.end)
         }
     }
 
     private mutating func serializeRequestHead(_ head: HTTPRequestHead, into buffer: inout ByteBuffer) {
         // First, the framing indicator
-        buffer.writeVarint(
-            self.type == .indeterminateLength
-                ? BHTTPFramingIndicator.requestIndeterminateLength.rawValue
-                : BHTTPFramingIndicator.requestKnownLength.rawValue
-        )
+        buffer.writeVarint(requestFramingIndicator)
 
         let method = head.method
         let scheme = "https"  // Hardcoded for now, but not really the right option.
@@ -123,11 +134,7 @@ public struct BHTTPSerializer {
 
     private mutating func serializeResponseHead(_ head: HTTPResponseHead, into buffer: inout ByteBuffer) {
         // First, the framing indicator
-        buffer.writeVarint(
-            self.type == .indeterminateLength
-                ? BHTTPFramingIndicator.responseInderterminateLength.rawValue
-                : BHTTPFramingIndicator.responseKnownLength.rawValue
-        )
+        buffer.writeVarint(responseFramingIndicator)
 
         buffer.writeVarint(Int(head.status.code))
 
@@ -141,7 +148,6 @@ public struct BHTTPSerializer {
         }
     }
 
-    @inline(__always)
     private static func serializeContentChunk(_ chunk: ByteBuffer, into buffer: inout ByteBuffer) {
         if chunk.readableBytes == 0 { return }
         buffer.writeVarintPrefixedImmutableBuffer(chunk)
@@ -184,39 +190,31 @@ public struct BHTTPSerializer {
 // Enum definitions for message, states, and types.
 extension BHTTPSerializer {
     // Finite State Machine for managing transitions in BHTTPSerializer.
-    private class BHTTPSerializerFSM {
+    public struct BHTTPSerializerFSM {
         var currentState: BHTTPSerializerState
 
         init(initialState: BHTTPSerializerState) {
             self.currentState = initialState
         }
 
-        // Transition to a new state, respecting the state machine constraints.
-        func transition(to state: BHTTPSerializerState) throws {
-            guard let allowedTransitions = Self.validTransitions[currentState] else {
-                throw ObliviousHTTPError.unexpectedHTTPMessageSection(state: currentState.rawValue)
+        mutating func transition(to state: BHTTPSerializerState) throws {
+            let allowedNextStates: Set<BHTTPSerializerState>
+            switch currentState {
+            case .start:
+                allowedNextStates = [.header]
+            case .header:
+                allowedNextStates = [.chunk, .trailers, .end]
+            case .chunk:
+                allowedNextStates = [.trailers, .end, .chunk]
+            case .trailers:
+                allowedNextStates = [.trailers, .end]
+            case .end:
+                allowedNextStates = []
             }
-
-            guard allowedTransitions.contains(state) else {
-                throw ObliviousHTTPError.unexpectedHTTPMessageSection(state: currentState.rawValue)
+            guard allowedNextStates.contains(state) else {
+                throw ObliviousHTTPError.unexpectedHTTPMessageSection()
             }
-
             currentState = state
-        }
-
-        // Define a dictionary to map current states to allowed transitions
-        private static let validTransitions: [BHTTPSerializerState: Set<BHTTPSerializerState>] = [
-            .HEADER: [.CHUNK, .TRAILERS],
-            .CHUNK: [.TRAILERS, .END],
-            .TRAILERS: [.END],
-            .END: [],
-        ]
-
-        // Ensure that the current state is one of the allowed states.
-        func ensureState(_ allowedStates: [BHTTPSerializerState]) throws {
-            if !allowedStates.contains(self.currentState) {
-                throw ObliviousHTTPError.unexpectedHTTPMessageSection(state: self.currentState.rawValue)
-            }
         }
     }
 
@@ -245,17 +243,18 @@ extension BHTTPSerializer {
         }
     }
 
-    public enum BHTTPFramingIndicator: Int {
-        case requestKnownLength = 0
-        case responseKnownLength = 1
-        case requestIndeterminateLength = 2
-        case responseInderterminateLength = 3
+    internal struct FramingIndicator {
+        static var requestKnownLength: Int { 0 }
+        static var responseKnownLength: Int { 1 }
+        static var requestIndeterminateLength: Int { 2 }
+        static var responseIndeterminateLength: Int { 3 }
     }
 
-    public enum BHTTPSerializerState: String {
-        case HEADER = "Header"
-        case CHUNK = "Chunk"
-        case TRAILERS = "Trailers"
-        case END = "End"
+    public enum BHTTPSerializerState {
+        case start
+        case header
+        case chunk
+        case trailers
+        case end
     }
 }
