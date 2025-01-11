@@ -18,7 +18,7 @@ import NIOHTTP1
 public struct BHTTPSerializer {
 
     private var fsm: BHTTPSerializerFSM
-    private var type: SerializerType
+    public var type: SerializerType
     private var chunkBuffer: ByteBuffer
     private var fieldSectionBuffer: ByteBuffer
 
@@ -61,50 +61,22 @@ public struct BHTTPSerializer {
     public mutating func serialize(_ message: Message, into buffer: inout ByteBuffer) throws {
         switch message {
         case .request(.head(let requestHead)):
-            self.serializeRequestHead(requestHead, into: &buffer)
-            try self.fsm.transition(to: BHTTPSerializerState.header)
+            try self.fsm.writeRequestHead(requestHead, into: &buffer, using: &self)
 
         case .response(.head(let responseHead)):
-            self.serializeResponseHead(responseHead, into: &buffer)
-            try self.fsm.transition(to: BHTTPSerializerState.header)
+            try self.fsm.writeResponseHead(responseHead, into: &buffer, using: &self)
 
         case .request(.body(.byteBuffer(let body))), .response(.body(.byteBuffer(let body))):
-            switch self.type {
-            case .knownLength:
-                self.stackContentChunk(body)
-                break
-            default:
-                Self.serializeContentChunk(body, into: &buffer)
-            }
-            try self.fsm.transition(to: BHTTPSerializerState.chunk)
+            try self.fsm.writeBodyChunk(body, into: &buffer, using: &self)
 
         case .request(.body(.fileRegion)), .response(.body(.fileRegion)):
             throw ObliviousHTTPError.unsupportedOption(reason: "fileregion unsupported")
 
         case .request(.end(.some(let trailers))), .response(.end(.some(let trailers))):
-            switch self.type {
-            case .knownLength:
-                self.serializeContent(into: &buffer)
-                self.stackKnownLengthFieldSection(trailers)
-                break
-            default:
-                // Send a 0 to terminate the body, then a field section.
-                buffer.writeInteger(UInt8(0))
-                Self.serializeIndeterminateLengthFieldSection(trailers, into: &buffer)
-            }
-            try self.fsm.transition(to: BHTTPSerializerState.trailers)
-
+            try self.fsm.writeTrailers(trailers, into: &buffer, using: &self)
 
         case .request(.end(.none)), .response(.end(.none)):
-            switch self.type {
-            case .knownLength:
-                self.serializeContent(into: &buffer)
-                self.serializeKnownLengthFieldSection(into: &buffer)
-                break
-            default:
-                buffer.writeInteger(UInt8(0))
-            }
-            try self.fsm.transition(to: BHTTPSerializerState.end)
+            try self.fsm.writeRequestEnd(into: &buffer, using: &self)
         }
     }
 
@@ -148,6 +120,16 @@ public struct BHTTPSerializer {
         }
     }
 
+    private mutating func serializeChunk(_ chunk: ByteBuffer, into buffer: inout ByteBuffer) {
+        switch self.type {
+        case .knownLength:
+            self.stackContentChunk(chunk)
+            break
+        default:
+            Self.serializeContentChunk(chunk, into: &buffer)
+        }
+    }
+
     private static func serializeContentChunk(_ chunk: ByteBuffer, into buffer: inout ByteBuffer) {
         if chunk.readableBytes == 0 { return }
         buffer.writeVarintPrefixedImmutableBuffer(chunk)
@@ -174,6 +156,19 @@ public struct BHTTPSerializer {
         buffer.writeInteger(UInt8(0))  // End of field section
     }
 
+    private mutating func serializeTrailers(_ trailers: HTTPHeaders, into buffer: inout ByteBuffer) {
+        switch self.type {
+        case .knownLength:
+            self.serializeContent(into: &buffer)
+            self.stackKnownLengthFieldSection(trailers)
+            break
+        default:
+            // Send a 0 to terminate the body, then a field section.
+            buffer.writeInteger(UInt8(0))
+            Self.serializeIndeterminateLengthFieldSection(trailers, into: &buffer)
+        }
+    }
+
     private mutating func serializeKnownLengthFieldSection(into buffer: inout ByteBuffer) {
         buffer.writeVarintPrefixedImmutableBuffer(self.fieldSectionBuffer)
         self.fieldSectionBuffer.clear()
@@ -185,19 +180,74 @@ public struct BHTTPSerializer {
             self.fieldSectionBuffer.writeVarintPrefixedString(value)
         }
     }
+
+    private mutating func endRequest(into buffer: inout ByteBuffer) {
+        switch self.type {
+        case .knownLength:
+            self.serializeContent(into: &buffer)
+            self.serializeKnownLengthFieldSection(into: &buffer)
+            break
+        default:
+            buffer.writeInteger(UInt8(0))
+        }
+    }
 }
 
 // Enum definitions for message, states, and types.
 extension BHTTPSerializer {
     // Finite State Machine for managing transitions in BHTTPSerializer.
-    public struct BHTTPSerializerFSM {
-        var currentState: BHTTPSerializerState
+    public class BHTTPSerializerFSM {
+        private(set) var currentState: BHTTPSerializerState
 
         init(initialState: BHTTPSerializerState) {
             self.currentState = initialState
         }
 
-        mutating func transition(to state: BHTTPSerializerState) throws {
+        func writeRequestHead(
+            _ requestHead: HTTPRequestHead,
+            into buffer: inout ByteBuffer,
+            using serializer: inout BHTTPSerializer
+        ) throws {
+            try self.transition(to: .header)
+            serializer.serializeRequestHead(requestHead, into: &buffer)
+        }
+
+        func writeResponseHead(
+            _ responseHead: HTTPResponseHead,
+            into buffer: inout ByteBuffer,
+            using serializer: inout BHTTPSerializer
+        ) throws {
+            try self.transition(to: .header)
+            serializer.serializeResponseHead(responseHead, into: &buffer)
+        }
+
+
+        func writeRequestEnd(
+            into buffer: inout ByteBuffer,
+            using serializer: inout BHTTPSerializer
+        ) throws {
+            serializer.endRequest(into: &buffer)
+            try self.transition(to: .end)
+        }
+        func writeBodyChunk(
+            _ body: ByteBuffer,
+            into buffer: inout ByteBuffer,
+            using serializer: inout BHTTPSerializer
+        ) throws {
+            serializer.serializeChunk(body, into: &buffer)
+            try self.transition(to: .chunk)
+        }
+
+        func writeTrailers(
+            _ trailers: HTTPHeaders,
+            into buffer: inout ByteBuffer,
+            using serializer: inout BHTTPSerializer
+        ) throws {
+            serializer.serializeTrailers(trailers, into: &buffer)
+            try self.transition(to: .trailers)
+        }
+
+        func transition(to state: BHTTPSerializerState) throws {
             let allowedNextStates: Set<BHTTPSerializerState>
             switch currentState {
             case .start:
