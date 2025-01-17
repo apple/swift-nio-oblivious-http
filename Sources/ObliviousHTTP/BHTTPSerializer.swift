@@ -18,7 +18,7 @@ import NIOHTTP1
 public struct BHTTPSerializer {
 
     private var fsm: BHTTPSerializerFSM
-    public var type: SerializerType
+    private var type: SerializerType
     private var chunkBuffer: ByteBuffer
     private var fieldSectionBuffer: ByteBuffer
 
@@ -197,7 +197,7 @@ public struct BHTTPSerializer {
 extension BHTTPSerializer {
     // Finite State Machine for managing transitions in BHTTPSerializer.
     public class BHTTPSerializerFSM {
-        private(set) var currentState: BHTTPSerializerState
+        private var currentState: BHTTPSerializerState
 
         init(initialState: BHTTPSerializerState) {
             self.currentState = initialState
@@ -247,7 +247,7 @@ extension BHTTPSerializer {
             try self.transition(to: .trailers)
         }
 
-        func transition(to state: BHTTPSerializerState) throws {
+        private func transition(to state: BHTTPSerializerState) throws {
             let allowedNextStates: Set<BHTTPSerializerState>
             switch currentState {
             case .start:
@@ -300,7 +300,7 @@ extension BHTTPSerializer {
         static var responseIndeterminateLength: Int { 3 }
     }
 
-    public enum BHTTPSerializerState {
+    internal enum BHTTPSerializerState {
         case start
         case header
         case chunk
