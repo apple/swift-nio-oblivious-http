@@ -53,7 +53,6 @@ public struct ObliviousHTTPError: Error, Hashable {
     }
 
     /// Create an error indicating that serializing failed due to an unexpected HTTP section.
-    /// - Parameter state: The state encountered.
     /// - Returns: An Error representing this failure.
     @inline(never)
     public static func unexpectedHTTPMessageSection() -> ObliviousHTTPError {

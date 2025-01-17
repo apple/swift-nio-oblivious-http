@@ -98,9 +98,9 @@ public struct BHTTPSerializer {
         case .knownLength:
             self.stackKnownLengthFieldSection(head.headers)
             self.serializeKnownLengthFieldSection(into: &buffer)
-            break
-        default:
+        case .indeterminateLength:
             Self.serializeIndeterminateLengthFieldSection(head.headers, into: &buffer)
+        default: break
         }
     }
 
@@ -114,9 +114,9 @@ public struct BHTTPSerializer {
         case .knownLength:
             self.stackKnownLengthFieldSection(head.headers)
             self.serializeKnownLengthFieldSection(into: &buffer)
-            break
-        default:
+        case .indeterminateLength:
             Self.serializeIndeterminateLengthFieldSection(head.headers, into: &buffer)
+        default: break
         }
     }
 
@@ -124,9 +124,9 @@ public struct BHTTPSerializer {
         switch self.type {
         case .knownLength:
             self.stackContentChunk(chunk)
-            break
-        default:
+        case .indeterminateLength:
             Self.serializeContentChunk(chunk, into: &buffer)
+        default: break
         }
     }
 
@@ -135,7 +135,7 @@ public struct BHTTPSerializer {
         buffer.writeVarintPrefixedImmutableBuffer(chunk)
     }
 
-    private mutating func serializeContent(into buffer: inout ByteBuffer) {
+    private mutating func serializeStackedContent(into buffer: inout ByteBuffer) {
         if self.chunkBuffer.readableBytes == 0 { return }
         buffer.writeVarintPrefixedImmutableBuffer(self.chunkBuffer)
         self.chunkBuffer.clear()
@@ -159,13 +159,13 @@ public struct BHTTPSerializer {
     private mutating func serializeTrailers(_ trailers: HTTPHeaders, into buffer: inout ByteBuffer) {
         switch self.type {
         case .knownLength:
-            self.serializeContent(into: &buffer)
+            self.serializeStackedContent(into: &buffer)
             self.stackKnownLengthFieldSection(trailers)
-            break
-        default:
+        case .indeterminateLength:
             // Send a 0 to terminate the body, then a field section.
             buffer.writeInteger(UInt8(0))
             Self.serializeIndeterminateLengthFieldSection(trailers, into: &buffer)
+        default: break
         }
     }
 
@@ -184,11 +184,11 @@ public struct BHTTPSerializer {
     private mutating func endRequest(into buffer: inout ByteBuffer) {
         switch self.type {
         case .knownLength:
-            self.serializeContent(into: &buffer)
+            self.serializeStackedContent(into: &buffer)
             self.serializeKnownLengthFieldSection(into: &buffer)
-            break
-        default:
+        case .indeterminateLength:
             buffer.writeInteger(UInt8(0))
+        default: break
         }
     }
 }
@@ -220,7 +220,6 @@ extension BHTTPSerializer {
             try self.transition(to: .header)
             serializer.serializeResponseHead(responseHead, into: &buffer)
         }
-
 
         func writeRequestEnd(
             into buffer: inout ByteBuffer,
