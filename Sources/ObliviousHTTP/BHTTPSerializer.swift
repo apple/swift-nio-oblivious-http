@@ -196,7 +196,7 @@ public struct BHTTPSerializer {
 // Enum definitions for message, states, and types.
 extension BHTTPSerializer {
     // Finite State Machine for managing transitions in BHTTPSerializer.
-    public class BHTTPSerializerFSM {
+    private class BHTTPSerializerFSM {
         private var currentState: BHTTPSerializerState
 
         init(initialState: BHTTPSerializerState) {
@@ -272,8 +272,8 @@ extension BHTTPSerializer {
         case response(HTTPServerResponsePart)
     }
 
-    public struct SerializerType: Equatable {
-        private enum InternalType: Equatable {
+    public struct SerializerType: Hashable, Sendable {
+        private enum InternalType: Hashable {
             case knownLength
             case indeterminateLength
         }
@@ -287,9 +287,6 @@ extension BHTTPSerializer {
             self.type = type
         }
 
-        public static func == (lop: SerializerType, rop: SerializerType) -> Bool {
-            lop.type == rop.type
-        }
     }
 
     internal struct FramingIndicator {
