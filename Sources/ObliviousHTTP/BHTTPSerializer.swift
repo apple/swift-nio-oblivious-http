@@ -18,9 +18,7 @@ import NIOHTTP1
 public struct BHTTPSerializer {
 
     private var fsm: BHTTPSerializerFSM
-    private var type: SerializerType
-    private var chunkBuffer: ByteBuffer
-    private var fieldSectionBuffer: ByteBuffer
+    private var context: SerializerContext
 
     /// Initialise a Binary HTTP Serialiser.
     /// - Parameters:
@@ -30,28 +28,8 @@ public struct BHTTPSerializer {
         type: SerializerType = .indeterminateLength,
         allocator: ByteBufferAllocator = ByteBufferAllocator()
     ) {
-        self.type = type
-        self.chunkBuffer = allocator.buffer(capacity: 0)
-        self.fieldSectionBuffer = allocator.buffer(capacity: 0)
         self.fsm = BHTTPSerializerFSM(initialState: BHTTPSerializerState.start)
-    }
-
-    private var requestFramingIndicator: Int {
-        switch self.type {
-        case .knownLength:
-            return FramingIndicator.requestKnownLength
-        default:
-            return FramingIndicator.requestIndeterminateLength
-        }
-    }
-
-    private var responseFramingIndicator: Int {
-        switch self.type {
-        case .knownLength:
-            return FramingIndicator.responseKnownLength
-        default:
-            return FramingIndicator.responseIndeterminateLength
-        }
+        self.context = SerializerContext(type: type, allocator: allocator)
     }
 
     /// Serialise a message into a buffer using binary HTTP encoding.
@@ -61,192 +39,231 @@ public struct BHTTPSerializer {
     public mutating func serialize(_ message: Message, into buffer: inout ByteBuffer) throws {
         switch message {
         case .request(.head(let requestHead)):
-            try self.fsm.writeRequestHead(requestHead, into: &buffer, using: &self)
+            try self.fsm.writeRequestHead(requestHead, into: &buffer, using: &self.context)
 
         case .response(.head(let responseHead)):
-            try self.fsm.writeResponseHead(responseHead, into: &buffer, using: &self)
+            try self.fsm.writeResponseHead(responseHead, into: &buffer, using: &self.context)
 
         case .request(.body(.byteBuffer(let body))), .response(.body(.byteBuffer(let body))):
-            try self.fsm.writeBodyChunk(body, into: &buffer, using: &self)
+            try self.fsm.writeBodyChunk(body, into: &buffer, using: &self.context)
 
         case .request(.body(.fileRegion)), .response(.body(.fileRegion)):
             throw ObliviousHTTPError.unsupportedOption(reason: "fileregion unsupported")
 
         case .request(.end(.some(let trailers))), .response(.end(.some(let trailers))):
-            try self.fsm.writeTrailers(trailers, into: &buffer, using: &self)
+            try self.fsm.writeTrailers(trailers, into: &buffer, using: &self.context)
 
         case .request(.end(.none)), .response(.end(.none)):
-            try self.fsm.writeRequestEnd(into: &buffer, using: &self)
+            try self.fsm.writeRequestEnd(into: &buffer, using: &self.context)
         }
     }
 
-    private mutating func serializeRequestHead(_ head: HTTPRequestHead, into buffer: inout ByteBuffer) {
-        // First, the framing indicator
-        buffer.writeVarint(requestFramingIndicator)
 
-        let method = head.method
-        let scheme = "https"  // Hardcoded for now, but not really the right option.
-        let path = head.uri
-        let authority = head.headers["Host"].first ?? ""
-
-        buffer.writeVarintPrefixedString(method.rawValue)
-        buffer.writeVarintPrefixedString(scheme)
-        buffer.writeVarintPrefixedString(authority)
-        buffer.writeVarintPrefixedString(path)
-
-        switch self.type {
-        case .knownLength:
-            self.stackKnownLengthFieldSection(head.headers)
-            self.serializeKnownLengthFieldSection(into: &buffer)
-        case .indeterminateLength:
-            Self.serializeIndeterminateLengthFieldSection(head.headers, into: &buffer)
-        default: break
-        }
-    }
-
-    private mutating func serializeResponseHead(_ head: HTTPResponseHead, into buffer: inout ByteBuffer) {
-        // First, the framing indicator
-        buffer.writeVarint(responseFramingIndicator)
-
-        buffer.writeVarint(Int(head.status.code))
-
-        switch self.type {
-        case .knownLength:
-            self.stackKnownLengthFieldSection(head.headers)
-            self.serializeKnownLengthFieldSection(into: &buffer)
-        case .indeterminateLength:
-            Self.serializeIndeterminateLengthFieldSection(head.headers, into: &buffer)
-        default: break
-        }
-    }
-
-    private mutating func serializeChunk(_ chunk: ByteBuffer, into buffer: inout ByteBuffer) {
-        switch self.type {
-        case .knownLength:
-            self.stackContentChunk(chunk)
-        case .indeterminateLength:
-            Self.serializeContentChunk(chunk, into: &buffer)
-        default: break
-        }
-    }
-
-    private static func serializeContentChunk(_ chunk: ByteBuffer, into buffer: inout ByteBuffer) {
-        if chunk.readableBytes == 0 { return }
-        buffer.writeVarintPrefixedImmutableBuffer(chunk)
-    }
-
-    private mutating func serializeStackedContent(into buffer: inout ByteBuffer) {
-        if self.chunkBuffer.readableBytes == 0 { return }
-        buffer.writeVarintPrefixedImmutableBuffer(self.chunkBuffer)
-        self.chunkBuffer.clear()
-    }
-
-    private mutating func stackContentChunk(_ chunk: ByteBuffer) {
-        self.chunkBuffer.writeImmutableBuffer(chunk)
-    }
-
-    private static func serializeIndeterminateLengthFieldSection(
-        _ fields: HTTPHeaders,
-        into buffer: inout ByteBuffer
-    ) {
-        for (name, value) in fields {
-            buffer.writeVarintPrefixedString(name)
-            buffer.writeVarintPrefixedString(value)
-        }
-        buffer.writeInteger(UInt8(0))  // End of field section
-    }
-
-    private mutating func serializeTrailers(_ trailers: HTTPHeaders, into buffer: inout ByteBuffer) {
-        switch self.type {
-        case .knownLength:
-            self.serializeStackedContent(into: &buffer)
-            self.stackKnownLengthFieldSection(trailers)
-        case .indeterminateLength:
-            // Send a 0 to terminate the body, then a field section.
-            buffer.writeInteger(UInt8(0))
-            Self.serializeIndeterminateLengthFieldSection(trailers, into: &buffer)
-        default: break
-        }
-    }
-
-    private mutating func serializeKnownLengthFieldSection(into buffer: inout ByteBuffer) {
-        buffer.writeVarintPrefixedImmutableBuffer(self.fieldSectionBuffer)
-        self.fieldSectionBuffer.clear()
-    }
-
-    private mutating func stackKnownLengthFieldSection(_ fields: HTTPHeaders) {
-        for (name, value) in fields {
-            self.fieldSectionBuffer.writeVarintPrefixedString(name)
-            self.fieldSectionBuffer.writeVarintPrefixedString(value)
-        }
-    }
-
-    private mutating func endRequest(into buffer: inout ByteBuffer) {
-        switch self.type {
-        case .knownLength:
-            self.serializeStackedContent(into: &buffer)
-            self.serializeKnownLengthFieldSection(into: &buffer)
-        case .indeterminateLength:
-            buffer.writeInteger(UInt8(0))
-        default: break
-        }
-    }
 }
 
 // Enum definitions for message, states, and types.
 extension BHTTPSerializer {
+    
+    private struct SerializerContext {
+        private var chunkBuffer: ByteBuffer
+        private var fieldSectionBuffer: ByteBuffer
+        private var type: SerializerType
+        
+        
+        public init(
+            type: SerializerType,
+            allocator: ByteBufferAllocator = ByteBufferAllocator()
+        ) {
+            self.chunkBuffer = allocator.buffer(capacity: 0)
+            self.fieldSectionBuffer = allocator.buffer(capacity: 0)
+            self.type = type
+        }
+        private var requestFramingIndicator: Int {
+            switch self.type {
+            case .knownLength:
+                return FramingIndicator.requestKnownLength
+            default:
+                return FramingIndicator.requestIndeterminateLength
+            }
+        }
+
+        private var responseFramingIndicator: Int {
+            switch self.type {
+            case .knownLength:
+                return FramingIndicator.responseKnownLength
+            default:
+                return FramingIndicator.responseIndeterminateLength
+            }
+        }
+        
+        
+        mutating func serializeRequestHead(_ head: HTTPRequestHead, into buffer: inout ByteBuffer) {
+            // First, the framing indicator
+            buffer.writeVarint(requestFramingIndicator)
+
+            let method = head.method
+            let scheme = "https"  // Hardcoded for now, but not really the right option.
+            let path = head.uri
+            let authority = head.headers["Host"].first ?? ""
+
+            buffer.writeVarintPrefixedString(method.rawValue)
+            buffer.writeVarintPrefixedString(scheme)
+            buffer.writeVarintPrefixedString(authority)
+            buffer.writeVarintPrefixedString(path)
+
+            switch self.type {
+            case .knownLength:
+                self.stackKnownLengthFieldSection(head.headers)
+                self.serializeKnownLengthFieldSection(into: &buffer)
+            case .indeterminateLength:
+                Self.serializeIndeterminateLengthFieldSection(head.headers, into: &buffer)
+            default: break
+            }
+        }
+
+        mutating func serializeResponseHead(_ head: HTTPResponseHead, into buffer: inout ByteBuffer) {
+            // First, the framing indicator
+            buffer.writeVarint(responseFramingIndicator)
+
+            buffer.writeVarint(Int(head.status.code))
+
+            switch self.type {
+            case .knownLength:
+                self.stackKnownLengthFieldSection(head.headers)
+                self.serializeKnownLengthFieldSection(into: &buffer)
+            case .indeterminateLength:
+                Self.serializeIndeterminateLengthFieldSection(head.headers, into: &buffer)
+            default: break
+            }
+        }
+
+        mutating func serializeChunk(_ chunk: ByteBuffer, into buffer: inout ByteBuffer) {
+            switch self.type {
+            case .knownLength:
+                self.stackContentChunk(chunk)
+            case .indeterminateLength:
+                Self.serializeContentChunk(chunk, into: &buffer)
+            default: break
+            }
+        }
+
+        static func serializeContentChunk(_ chunk: ByteBuffer, into buffer: inout ByteBuffer) {
+            if chunk.readableBytes == 0 { return }
+            buffer.writeVarintPrefixedImmutableBuffer(chunk)
+        }
+
+        mutating func serializeStackedContent(into buffer: inout ByteBuffer) {
+            if self.chunkBuffer.readableBytes == 0 { return }
+            buffer.writeVarintPrefixedImmutableBuffer(self.chunkBuffer)
+            self.chunkBuffer.clear()
+        }
+
+        mutating func stackContentChunk(_ chunk: ByteBuffer) {
+            self.chunkBuffer.writeImmutableBuffer(chunk)
+        }
+
+        static func serializeIndeterminateLengthFieldSection(
+            _ fields: HTTPHeaders,
+            into buffer: inout ByteBuffer
+        ) {
+            for (name, value) in fields {
+                buffer.writeVarintPrefixedString(name)
+                buffer.writeVarintPrefixedString(value)
+            }
+            buffer.writeInteger(UInt8(0))  // End of field section
+        }
+
+        mutating func serializeTrailers(_ trailers: HTTPHeaders, into buffer: inout ByteBuffer) {
+            switch self.type {
+            case .knownLength:
+                self.serializeStackedContent(into: &buffer)
+                self.stackKnownLengthFieldSection(trailers)
+            case .indeterminateLength:
+                // Send a 0 to terminate the body, then a field section.
+                buffer.writeInteger(UInt8(0))
+                Self.serializeIndeterminateLengthFieldSection(trailers, into: &buffer)
+            default: break
+            }
+        }
+
+
+        mutating func endRequest(into buffer: inout ByteBuffer) {
+            switch self.type {
+            case .knownLength:
+                self.serializeStackedContent(into: &buffer)
+                self.serializeKnownLengthFieldSection(into: &buffer)
+            case .indeterminateLength:
+                buffer.writeInteger(UInt8(0))
+            default: break
+            }
+        }
+        
+        mutating func stackKnownLengthFieldSection(_ fields: HTTPHeaders) {
+            for (name, value) in fields {
+                self.fieldSectionBuffer.writeVarintPrefixedString(name)
+                self.fieldSectionBuffer.writeVarintPrefixedString(value)
+            }
+        }
+        
+        
+        mutating func serializeKnownLengthFieldSection(into buffer: inout ByteBuffer) {
+            buffer.writeVarintPrefixedImmutableBuffer(self.fieldSectionBuffer)
+            self.fieldSectionBuffer.clear()
+        }
+    }
+    
     // Finite State Machine for managing transitions in BHTTPSerializer.
-    private class BHTTPSerializerFSM {
+    private struct BHTTPSerializerFSM {
         private var currentState: BHTTPSerializerState
 
         init(initialState: BHTTPSerializerState) {
             self.currentState = initialState
         }
 
-        func writeRequestHead(
+        mutating func writeRequestHead(
             _ requestHead: HTTPRequestHead,
             into buffer: inout ByteBuffer,
-            using serializer: inout BHTTPSerializer
+            using context: inout SerializerContext
         ) throws {
             try self.transition(to: .header)
-            serializer.serializeRequestHead(requestHead, into: &buffer)
+            context.serializeRequestHead(requestHead, into: &buffer)
         }
 
-        func writeResponseHead(
+        mutating func writeResponseHead(
             _ responseHead: HTTPResponseHead,
             into buffer: inout ByteBuffer,
-            using serializer: inout BHTTPSerializer
+            using context: inout SerializerContext
         ) throws {
             try self.transition(to: .header)
-            serializer.serializeResponseHead(responseHead, into: &buffer)
+            context.serializeResponseHead(responseHead, into: &buffer)
         }
 
-        func writeRequestEnd(
+        mutating func writeRequestEnd(
             into buffer: inout ByteBuffer,
-            using serializer: inout BHTTPSerializer
+            using context: inout SerializerContext
         ) throws {
-            serializer.endRequest(into: &buffer)
+            context.endRequest(into: &buffer)
             try self.transition(to: .end)
         }
-        func writeBodyChunk(
+        mutating func writeBodyChunk(
             _ body: ByteBuffer,
             into buffer: inout ByteBuffer,
-            using serializer: inout BHTTPSerializer
+            using context: inout SerializerContext
         ) throws {
-            serializer.serializeChunk(body, into: &buffer)
+            context.serializeChunk(body, into: &buffer)
             try self.transition(to: .chunk)
         }
 
-        func writeTrailers(
+        mutating func writeTrailers(
             _ trailers: HTTPHeaders,
             into buffer: inout ByteBuffer,
-            using serializer: inout BHTTPSerializer
+            using context: inout SerializerContext
         ) throws {
-            serializer.serializeTrailers(trailers, into: &buffer)
+            context.serializeTrailers(trailers, into: &buffer)
             try self.transition(to: .trailers)
         }
 
-        private func transition(to state: BHTTPSerializerState) throws {
+        private mutating func transition(to state: BHTTPSerializerState) throws {
             let allowedNextStates: Set<BHTTPSerializerState>
             switch currentState {
             case .start:
