@@ -573,6 +573,10 @@ extension UInt16 {
             self = 0x0012
         case .Curve25519_HKDF_SHA256:
             self = 0x0020
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported KEM")
+        #endif
         }
     }
 
@@ -584,6 +588,10 @@ extension UInt16 {
             self = 0x0002
         case .HKDF_SHA512:
             self = 0x0003
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported KDF")
+        #endif
         }
     }
 
@@ -597,6 +605,10 @@ extension UInt16 {
             self = 0x0003
         case .exportOnly:
             self = 0xFFFF
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported AEAD")
+        #endif
         }
     }
 }
@@ -627,6 +639,10 @@ extension HPKE.KEM {
             return 133
         case .Curve25519_HKDF_SHA256:
             return 32
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported KEM")
+        #endif
         }
     }
 }
@@ -672,6 +688,10 @@ extension HPKE.AEAD {
             return 32
         case .exportOnly:
             fatalError("ExportOnly should not return a key size.")
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported AEAD")
+        #endif
         }
     }
 
@@ -681,6 +701,10 @@ extension HPKE.AEAD {
             return 12
         case .exportOnly:
             fatalError("ExportOnly should not return a nonce size.")
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported AEAD")
+        #endif
         }
     }
 
@@ -690,6 +714,10 @@ extension HPKE.AEAD {
             return 16
         case .exportOnly:
             fatalError("ExportOnly should not return a tag size.")
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported AEAD")
+        #endif
         }
     }
 
@@ -750,6 +778,10 @@ extension HPKE.AEAD {
             }
         case .exportOnly:
             throw HPKE.Errors.exportOnlyMode
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported AEAD")
+        #endif
         }
     }
 }
@@ -796,6 +828,10 @@ extension HPKE.KDF {
             return SymmetricKey(data: HKDF<SHA384>.extract(inputKeyMaterial: ikm, salt: salt))
         case .HKDF_SHA512:
             return SymmetricKey(data: HKDF<SHA512>.extract(inputKeyMaterial: ikm, salt: salt))
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported KDF")
+        #endif
         }
     }
 
@@ -825,6 +861,10 @@ extension HPKE.KDF {
                     outputByteCount: outputByteCount
                 )
             )
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported KDF")
+        #endif
         }
     }
 }
