@@ -44,13 +44,29 @@ public struct ObliviousHTTPError: Error, Hashable {
         Self.init(backing: .truncatedEncoding(reason: reason))
     }
 
-    /// Create an error indicating that parsing faileud due to an unexpected HTTP status code.
+    /// Create an error indicating that parsing failed due to an unexpected HTTP status code.
     /// - Parameter status: The status code encountered.
     /// - Returns: An Error representing this failure.
     @inline(never)
     public static func invalidStatus(status: Int) -> ObliviousHTTPError {
         Self.init(backing: .invalidStatus(status: status))
     }
+
+    /// Create an error indicating that serializing failed due to an unexpected HTTP section.
+    /// - Returns: An Error representing this failure.
+    @inline(never)
+    public static func unexpectedHTTPMessageSection() -> ObliviousHTTPError {
+        Self.init(backing: .unexpectedHTTPMessageSection(state: "An unexpected HTTP message section was encountered."))
+    }
+
+    /// Create an error indicating that serializing failed due to an unsupported option.
+    /// - Parameter reason: The unsupported option details.
+    /// - Returns: An Error representing this failure.
+    @inline(never)
+    public static func unsupportedOption(reason: String) -> ObliviousHTTPError {
+        Self.init(backing: .unsupportedOption(reason: reason))
+    }
+
 }
 
 extension ObliviousHTTPError {
@@ -59,5 +75,7 @@ extension ObliviousHTTPError {
         case invalidFieldSection(reason: String)
         case truncatedEncoding(reason: String)
         case invalidStatus(status: Int)
+        case unexpectedHTTPMessageSection(state: String)
+        case unsupportedOption(reason: String)
     }
 }
