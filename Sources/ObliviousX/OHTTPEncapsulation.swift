@@ -11,13 +11,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 //===----------------------------------------------------------------------===//
-import Crypto
+@preconcurrency import Crypto
 import Foundation
 
 /// Functionality to add oblivious HTTP style encapsulation to data messages.
 @available(macOS 14, iOS 17, *)
-public enum OHTTPEncapsulation {
-    /// Encapsulate a request messge.
+public enum OHTTPEncapsulation: Sendable {
+    /// Encapsulate a request message.
     /// - Parameters:
     ///   - keyID: Key Id to send.
     ///   - publicKey: Public key for the recipient.
@@ -47,7 +47,7 @@ public enum OHTTPEncapsulation {
     }
 
     /// Stream a request in multiple chunks.
-    public struct StreamingRequest {
+    public struct StreamingRequest: Sendable {
         /// Bytes representation of header.
         public let header: Data
         /// Sender used to seal messages.
@@ -127,7 +127,7 @@ public enum OHTTPEncapsulation {
     }
 
     /// Encapsulated request header.
-    public struct RequestHeader {
+    public struct RequestHeader: Sendable {
         /// Key Id specified.
         public private(set) var keyID: UInt8
 
@@ -148,7 +148,7 @@ public enum OHTTPEncapsulation {
     }
 
     /// Functionality to remove oblivious encapsulation from a series of request chunks.
-    public struct StreamingRequestDecapsulator {
+    public struct StreamingRequestDecapsulator: Sendable {
         /// The request header.
         public private(set) var header: RequestHeader
 
@@ -285,7 +285,7 @@ public enum OHTTPEncapsulation {
     }
 
     /// Processor for a series of response chunks.
-    public struct StreamingResponse {
+    public struct StreamingResponse: Sendable {
         private let responseNonce: Data
 
         private var aeadNonce: Data
@@ -380,7 +380,7 @@ public enum OHTTPEncapsulation {
     }
 
     /// Decapsulator which can process a response as a series of chunks.
-    public struct StreamingResponseDecapsulator {
+    public struct StreamingResponseDecapsulator: Sendable {
         enum State {
             case awaitingResponseNonce(
                 mediaType: String,
@@ -517,6 +517,8 @@ public enum OHTTPEncapsulation {
         return info
     }
 }
+
+extension OHTTPEncapsulation.RequestDecapsulator: Sendable where Bytes: Sendable {}
 
 extension RandomAccessCollection where Element == UInt8, Self == Self.SubSequence {
     mutating func popUInt8() -> UInt8? {

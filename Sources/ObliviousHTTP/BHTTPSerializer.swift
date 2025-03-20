@@ -21,7 +21,7 @@ import NIOHTTP1
 // Later optimizations can be made by adding more state into this type.
 /// Binary HTTP serialiser as described in [RFC9292](https://www.rfc-editor.org/rfc/rfc9292).
 /// Currently only indeterminate-length encoding is supported.
-public struct BHTTPSerializer {
+public struct BHTTPSerializer: Sendable {
     /// Initialise a Binary HTTP Serialiser.
     public init() {}
 
@@ -96,7 +96,7 @@ public struct BHTTPSerializer {
 
 extension BHTTPSerializer {
     /// Types of message for binary http serilaisation
-    public enum Message {
+    public enum Message: Sendable {
         /// Part of an HTTP request.
         case request(HTTPClientRequestPart)
         /// Part of an HTTP response.
