@@ -15,7 +15,7 @@ import NIOCore
 import NIOHTTP1
 
 /// Binary HTTP parser as described in [RFC9292](https://www.rfc-editor.org/rfc/rfc9292).
-public struct BHTTPParser {
+public struct BHTTPParser: Sendable {
     private var buffer: ByteBuffer?
     private var state: State
     private var role: Role
@@ -447,7 +447,7 @@ extension BHTTPParser {
     }
 
     /// Role to assume when parsing binary HTTP
-    public enum Role {
+    public enum Role: Sendable {
         case client
         case server
 
@@ -471,7 +471,7 @@ extension BHTTPParser {
     }
 
     /// Part of overall HTTP request or response.
-    public enum Message {
+    public enum Message: Sendable {
         case request(HTTPServerRequestPart)
         case response(HTTPClientResponsePart)
     }
