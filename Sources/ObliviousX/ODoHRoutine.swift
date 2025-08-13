@@ -73,6 +73,69 @@ public struct ODoH: Sendable {
             self.pkR = try self.ct.kem.getPublicKey(data: configuration.contents.publicKey)
             self.keyID = configuration.contents.identifier
         }
+
+        /// Encrypt DNS query using HPKE for transmission through proxy.
+        ///
+        /// Returns encrypted message and sender context needed for response decryption.
+        ///
+        /// - Parameter queryPlain: DNS query with padding
+        /// - Returns: Encrypted query data and HPKE sender context
+        /// - Precondition: Encrypted message size (plaintext + AEAD tag)
+        ///     must not exceed 65535 bytes due to wire format limitation
+        public func encryptQuery(
+            queryPlain: MessagePlaintext
+        ) throws -> (
+            encryptedQuery: Data, context: HPKE.Sender
+        ) {
+            var context = try HPKE.Sender(
+                recipientKey: self.pkR,
+                ciphersuite: self.ct,
+                info: ODoHQueryInfo
+            )
+
+            let sealedData = try context.seal(
+                queryPlain.encode(),
+                authenticating: self.aad(.query, key: self.keyID)
+            )
+            let encapsulatedKey = context.encapsulatedKey
+
+            var encryptedMessage = Data()
+            encryptedMessage.append(encapsulatedKey)
+            encryptedMessage.append(sealedData)
+
+            precondition(
+                encryptedMessage.count <= UInt16.max,
+                """
+                Encrypted message size (encapsulatedKey + plaintext + AEAD tag) must not exceed 65535 bytes.
+                This limit is imposed by the ODoH wire format which uses UInt16 length fields
+                for the encrypted_message field in the Message structure.
+                """
+            )
+
+            let message = Message(
+                messageType: .query,
+                keyID: self.keyID,
+                encryptedMessage: encryptedMessage
+            )
+
+            return (message.encode(), context)
+        }
+
+        /// Construct Additional Authenticated Data (AAD) for AEAD operations.
+        ///
+        /// Format: message_type (1 byte) || key_length (2 bytes) || key_data
+        ///
+        /// - Parameters:
+        ///   - type: Message type (query or response)
+        ///   - key: Key identifier or response nonce
+        /// - Returns: AAD bytes for AEAD operations
+        private func aad(_ type: Message.MessageType, key: Data) -> Data {
+            var aad = Data([type.rawValue])
+            let keyLength = UInt16(key.count)
+            aad.append(bigEndianBytes: keyLength)
+            aad.append(key)
+            return aad
+        }
     }
 
     /// Result of parsing a collection of ODoH configurations.
@@ -619,6 +682,29 @@ extension HPKE.KEM {
         @unknown default:
             fatalError("Unsupported KEM")
         #endif
+        }
+    }
+}
+
+extension HPKE.KDF {
+    /// Get the hash output length in bytes for this KDF.
+    ///
+    /// These values correspond to the output lengths of the underlying hash functions:
+    /// - **SHA-256**: 32 bytes (256 bits)
+    /// - **SHA-384**: 48 bytes (384 bits)
+    /// - **SHA-512**: 64 bytes (512 bits)
+    ///
+    /// Used for key identifier derivation and other protocol operations requiring hash length.
+    var hashByteCount: Int {
+        switch self {
+        case .HKDF_SHA256:
+            return 32
+        case .HKDF_SHA384:
+            return 48
+        case .HKDF_SHA512:
+            return 64
+        @unknown default:
+            fatalError("Unsupported KDF")
         }
     }
 }
