@@ -195,6 +195,71 @@ public struct ODoH: Sendable {
             return messagePlaintext
         }
 
+        /// Decrypt DNS query using server's private key.
+        ///
+        /// Establishes HPKE recipient context needed for response encryption.
+        ///
+        /// - Parameters:
+        ///   - queryData: Encrypted query from proxy
+        ///   - privateKey: Server's private key
+        /// - Returns: Decrypted query and HPKE recipient context
+        public func decryptQuery<PrivateKey: HPKEDiffieHellmanPrivateKey>(
+            queryData: Data,
+            privateKey: PrivateKey
+        ) throws -> (plaintext: MessagePlaintext, context: HPKE.Recipient) {
+            // Parse the query message
+            var queryData = queryData
+            guard let query = Message(&queryData) else {
+                throw ObliviousXError.invalidODoHData()
+            }
+
+            return try decryptQuery(query: query, privateKey: privateKey)
+        }
+
+        /// Decrypt DNS query using server's private key.
+        ///
+        /// Establishes HPKE recipient context needed for response encryption.
+        ///
+        /// - Parameters:
+        ///   - query: Encrypted query from proxy
+        ///   - privateKey: Server's private key
+        /// - Returns: Decrypted query and HPKE recipient context
+        public func decryptQuery<PrivateKey: HPKEDiffieHellmanPrivateKey>(
+            query: Message,
+            privateKey: PrivateKey
+        ) throws -> (plaintext: MessagePlaintext, context: HPKE.Recipient) {
+            guard query.messageType == .query else {
+                throw ObliviousXError.invalidMessageType(
+                    expected: Message.MessageType.query.rawValue,
+                    actual: query.messageType.rawValue
+                )
+            }
+
+            var ciphertext = query.encryptedMessage
+            guard let enc = ciphertext.popFirst(self.ct.kem.encapsulatedKeySize) else {
+                throw CryptoKitError.incorrectParameterSize
+            }
+
+            // Setup HPKE recipient context
+            var context = try HPKE.Recipient(
+                privateKey: privateKey,
+                ciphersuite: self.ct,
+                info: ODoHQueryInfo,
+                encapsulatedKey: enc
+            )
+
+            // Decrypt query
+            var plaintext = try context.open(
+                ciphertext,
+                authenticating: self.aad(.query, key: self.keyID)
+            )
+
+            guard let messagePlaintext = MessagePlaintext(&plaintext) else {
+                throw ObliviousXError.invalidODoHData()
+            }
+            return (messagePlaintext, context)
+        }
+
         /// Derive AEAD key and nonce for response encryption.
         ///
         /// Uses HKDF Extract-and-Expand with query plaintext and response nonce as salt.
