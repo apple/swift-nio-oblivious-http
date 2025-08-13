@@ -1,0 +1,23 @@
+import Crypto
+import Foundation
+import XCTest
+
+@testable import ObliviousX
+
+final class ObliviousDoHTests: XCTestCase {
+    func testConfigurationsParsing() throws {
+        // Configuration grabbed from odoh.cloudflare-dns.com/.well-known/odohconfigs
+        let configurationsBytes: [UInt8] = [
+            0x00, 0x2C, 0x00, 0x01, 0x00, 0x28, 0x00, 0x20, 0x00, 0x01,
+            0x00, 0x01, 0x00, 0x20, 0x8B, 0x70, 0xFE, 0xDD, 0x79, 0xBA,
+            0x68, 0x55, 0xDB, 0x1D, 0x01, 0x25, 0xBF, 0x2D, 0xEA, 0xC0,
+            0xE6, 0x88, 0x3B, 0x4F, 0xC0, 0x41, 0xD0, 0xB6, 0xA3, 0x34,
+            0x71, 0x36, 0x33, 0xCF, 0x36, 0x4C,
+        ]
+        var configurationsData = Data(configurationsBytes)
+
+        let configurations = ODoH.Configurations.parseWithDetails(&configurationsData)
+        XCTAssert(configurations.hasValidConfigurations)
+        XCTAssert(configurations.failedConfigurations.isEmpty)
+    }
+}

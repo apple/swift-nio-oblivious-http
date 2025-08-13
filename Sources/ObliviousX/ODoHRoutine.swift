@@ -33,6 +33,22 @@ let ODoHKeyInfo = Data("odoh key".utf8)
 /// Used to derive the AEAD nonce for encrypting/decrypting DNS responses
 let ODoHNonceInfo = Data("odoh nonce".utf8)
 
+/// Protocol for types that can be serialized to and from ODoH wire format.
+///
+/// Provides bidirectional conversion between Swift types and their network representation
+/// as specified in RFC 9230. All ODoH message types implement this protocol to enable
+/// consistent serialization and parsing across the protocol stack.
+private protocol ODoHCodable {
+    /// Initialize from wire format bytes, consuming data as it parses
+    /// - Parameter bytes: The raw network data to parse (consumed during parsing)
+    /// - Returns: `nil` if parsing fails or data is invalid
+    init?(_ bytes: inout Data)
+
+    /// Serialize to wire format bytes
+    /// - Returns: The encoded data ready for network transmission
+    func encode() -> Data
+}
+
 public struct ODoH: Sendable {
     public struct Routine {
         public private(set) var ct: HPKE.Ciphersuite
@@ -244,6 +260,365 @@ public struct ODoH: Sendable {
 
         public var isResponse: Bool {
             self.messageType == .response
+        }
+    }
+}
+
+// MARK: - ODoHCodable Implementations
+
+extension ODoH.Configurations: ODoHCodable {
+    /// Deserialize configurations collection from wire format bytes.
+    ///
+    /// **Wire Format:**
+    /// - total_length (2 bytes): Total length of all configurations
+    /// - configs (variable): Concatenated Configuration structures
+    ///
+    /// This method attempts to parse all configurations and returns successfully
+    /// parsed ones while discarding unsupported configurations. Use `parseWithDetails`
+    /// to get information about failed configurations.
+    ///
+    /// - Parameter bytes: The wire format data to parse
+    /// - Returns: `nil` if no configurations could be parsed successfully
+    public init?(_ bytes: inout Data) {
+        let result = Self.parseWithDetails(&bytes)
+        guard result.hasValidConfigurations else {
+            return nil
+        }
+        self = result.validConfigurations
+    }
+
+    /// Parse configurations with detailed error information for failed configurations.
+    ///
+    /// This method provides comprehensive information about both successful and failed
+    /// configuration parsing attempts, allowing clients to understand which configurations
+    /// are supported and why others failed.
+    ///
+    /// **Wire Format:**
+    /// - total_length (2 bytes): Total length of all configurations
+    /// - configs (variable): Concatenated Configuration structures
+    ///
+    /// - Parameter bytes: The wire format data to parse
+    /// - Returns: Complete parsing result with valid configurations and error details
+    public static func parseWithDetails(_ bytes: inout Data) -> ODoH.ConfigurationParsingResult {
+        // Pop the entire structure from memory. To see if there was any errors structure of the Data first.
+        guard
+            let totalLength = bytes.popUInt16(),
+            var configsData = bytes.popFirst(Int(totalLength))
+        else {
+            return ODoH.ConfigurationParsingResult(
+                validConfigurations: [],
+                failedConfigurations: [(bytes, .invalidODoHData())]
+            )
+        }
+
+        var validConfigs: ODoH.Configurations = []
+        var failedConfigs: [(rawData: Data, error: ObliviousXError)] = []
+
+        while !configsData.isEmpty {
+            let beforeByteCount = configsData.count
+            let originalData = configsData
+
+            let parseResult = ODoH.Configuration.parseWithDetails(&configsData)
+            switch parseResult {
+            case .success(let config):
+                validConfigs.append(config)
+            case .failure(let error):
+                if error == ObliviousXError.invalidODoHData() {
+                    break
+                }
+
+                let consumedBytes = beforeByteCount - configsData.count
+                let failedConfigData = originalData.prefix(consumedBytes)
+                failedConfigs.append((Data(failedConfigData), error))
+            }
+        }
+
+        return ODoH.ConfigurationParsingResult(
+            validConfigurations: validConfigs,
+            failedConfigurations: failedConfigs
+        )
+    }
+
+    /// Serialize configurations collection to wire format bytes.
+    ///
+    /// - Returns: The encoded configurations ready for network transmission
+    public func encode() -> Data {
+        var configsData = Data()
+        for config in self {
+            configsData.append(config.encode())
+        }
+
+        var data = Data()
+        data.append(bigEndianBytes: UInt16(configsData.count))  // 2 bytes: total length
+        data.append(configsData)  // Variable: concatenated configs
+        return data
+    }
+
+    /// Find the first configuration matching the specified version.
+    ///
+    /// Searches through the configurations collection and returns the first configuration
+    /// that matches the requested version. This is useful for version negotiation where
+    /// clients need to find a compatible configuration version.
+    ///
+    /// - Parameter version: The version to search for
+    /// - Returns: The first matching configuration, or `nil` if no configuration with that version exists
+    public func first(version: UInt16) -> ODoH.Configuration? {
+        self.first { $0.version == version }
+    }
+
+    /// Find the first configuration matching the specified key identifier.
+    ///
+    /// Searches through the configurations collection and returns the first configuration
+    /// that matches the requested key identifier. This is useful for selecting a specific
+    /// configuration when the client knows which key should be used for encryption.
+    ///
+    /// - Parameter keyID: The key identifier to search for
+    /// - Returns: The first matching configuration, or `nil` if no configuration with that key ID exists
+    public func first(keyID: Data) -> ODoH.Configuration? {
+        self.first { $0.contents.identifier == keyID }
+    }
+}
+
+extension ODoH.Configuration: ODoHCodable {
+    /// Deserialize complete ODoH configuration from wire format bytes.
+    ///
+    /// **Wire Format:**
+    /// - version (2 bytes): Protocol version (0x0001 for RFC 9230)
+    /// - length (2 bytes): Length of contents field
+    /// - contents (variable): The configuration contents
+    ///
+    /// - Parameter bytes: The wire format data to parse
+    /// - Returns: `nil` if parsing fails or version is unsupported
+    internal init?(_ bytes: inout Data) {
+        switch Self.parseWithDetails(&bytes) {
+        case .success(let config):
+            self = config
+        case .failure:
+            return nil
+        }
+    }
+
+    /// Parse configuration with detailed error information.
+    ///
+    /// This method provides comprehensive error information when configuration parsing fails,
+    /// allowing callers to understand exactly what went wrong during parsing.
+    ///
+    /// - Parameter bytes: The wire format data to parse
+    /// - Returns: Result containing either a valid configuration or detailed error information
+    internal static func parseWithDetails(
+        _ bytes: inout Data
+    ) -> Result<
+        ODoH.Configuration, ObliviousXError
+    > {
+        // Pop the entire structure from memory. To see if there was any errors structure of the Data first.
+        guard
+            let version = bytes.popUInt16(),
+            let length = bytes.popUInt16(),
+            var contentsBytes = bytes.popFirst(Int(length))  // Pop the entire object
+        else {
+            return .failure(.invalidODoHData())
+        }
+
+        let contentsResult = ODoH.ConfigurationContents.parseWithDetails(&contentsBytes)
+        switch contentsResult {
+        case .success(let contents):
+            let config = ODoH.Configuration(version: version, contents: contents)
+            return .success(config)
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    /// Serialize complete configuration to wire format bytes.
+    ///
+    /// - Returns: The encoded configuration ready for network transmission
+    internal func encode() -> Data {
+        var data = Data()
+        let contentsData = self.contents.encode()
+        data.append(bigEndianBytes: self.version)  // 2 bytes: version
+        data.append(bigEndianBytes: UInt16(contentsData.count))  // 2 bytes: contents length
+        data.append(contentsData)  // Variable: contents
+        return data
+    }
+}
+
+extension ODoH.ConfigurationContents: ODoHCodable {
+    /// Deserialize configuration contents from wire format bytes.
+    ///
+    /// **Wire Format:**
+    /// - kem_id (2 bytes): Key Encapsulation Mechanism identifier
+    /// - kdf_id (2 bytes): Key Derivation Function identifier
+    /// - aead_id (2 bytes): AEAD algorithm identifier
+    /// - public_key_length (2 bytes): Length of public key
+    /// - public_key (variable): The public key bytes
+    ///
+    /// - Parameter bytes: The wire format data to parse
+    /// - Returns: `nil` if parsing fails or unsupported algorithms are encountered
+    internal init?(_ bytes: inout Data) {
+        switch Self.parseWithDetails(&bytes) {
+        case .success(let contents):
+            self = contents
+        case .failure:
+            return nil
+        }
+    }
+
+    /// Parse configuration contents with detailed error information.
+    ///
+    /// This method provides comprehensive error information when configuration contents parsing fails,
+    /// allowing callers to understand exactly what went wrong during parsing.
+    ///
+    /// - Parameter bytes: The wire format data to parse
+    /// - Returns: Result containing either valid configuration contents or detailed error information
+    internal static func parseWithDetails(
+        _ bytes: inout Data
+    ) -> Result<
+        ODoH.ConfigurationContents, ObliviousXError
+    > {
+        // As we have already popped the entirety of the configuration
+        // contents we don't have to fail with .invalidODoHData.
+        guard
+            let kemID = bytes.popUInt16(),
+            let kdfID = bytes.popUInt16(),
+            let aeadID = bytes.popUInt16(),
+            let keyLength = bytes.popUInt16(),
+            let key = bytes.popFirst(Int(keyLength)),
+            let kem = HPKE.KEM(networkIdentifier: kemID),
+            let kdf = HPKE.KDF(networkIdentifier: kdfID),
+            let aead = HPKE.AEAD(networkIdentifier: aeadID),
+            aead != .exportOnly
+        else {
+            return .failure(.unsupportedHPKEParameters())
+        }
+
+        // Try to validate the public key by attempting to create a key instance
+        do {
+            _ = try kem.getPublicKey(data: key)
+        } catch {
+            return .failure(.invalidPublicKey(kemID: kemID, key: key))
+        }
+
+        let contents = ODoH.ConfigurationContents(kem: kem, kdf: kdf, aead: aead, publicKey: key)
+        return .success(contents)
+    }
+
+    /// Serialize configuration contents to wire format bytes.
+    ///
+    /// - Returns: The encoded configuration contents ready for network transmission
+    internal func encode() -> Data {
+        var data = Data()
+        data.append(self.kem.identifier)  // 2 bytes: KEM ID
+        data.append(self.kdf.identifier)  // 2 bytes: KDF ID
+        data.append(self.aead.identifier)  // 2 bytes: AEAD ID
+        data.append(bigEndianBytes: UInt16(self.publicKey.count))  // 2 bytes: key length
+        data.append(self.publicKey)  // Variable: key data
+        return data
+    }
+}
+
+extension ODoH.MessagePlaintext: ODoHCodable {
+    /// Deserialize plaintext message from wire format bytes.
+    ///
+    /// **Wire Format:**
+    /// - dns_message_length (2 bytes): Length of DNS message
+    /// - dns_message (variable): The DNS message in wire format
+    /// - padding_length (2 bytes): Length of padding
+    /// - padding (variable): Zero-filled padding bytes
+    ///
+    /// - Parameter bytes: The wire format data to parse
+    /// - Returns: `nil` if parsing fails or insufficient data
+    internal init?(_ bytes: inout Data) {
+        guard
+            let dnsLength = bytes.popUInt16(),
+            let dns = bytes.popFirst(Int(dnsLength)),
+            let paddingLength = bytes.popUInt16(),
+            let padding = bytes.popFirst(Int(paddingLength)),
+            // Clients MUST validate R_plain.padding (as all zeros) before using R_plain.dns_message.
+            padding.allSatisfy({ $0 == 0 })
+        else { return nil }
+
+        self.dnsMessage = dns
+        self.padding = Array(padding)
+    }
+
+    /// Serialize plaintext message to wire format bytes.
+    ///
+    /// - Returns: The encoded message ready for encryption
+    internal func encode() -> Data {
+        var data = Data()
+        data.append(bigEndianBytes: UInt16(self.dnsMessage.count))  // 2 bytes: DNS length
+        data.append(self.dnsMessage)  // Variable: DNS data
+        data.append(bigEndianBytes: UInt16(self.padding.count))  // 2 bytes: padding length
+        data.append(contentsOf: self.padding)  // Variable: padding
+        return data
+    }
+}
+
+extension ODoH.Message: ODoHCodable {
+    /// Deserialize ODoH message from wire format bytes.
+    ///
+    /// **Wire Format:**
+    /// - message_type (1 byte): 0x01 for query, 0x02 for response
+    /// - key_id_length (2 bytes): Length of key ID field
+    /// - key_id (variable): Key identifier (queries) or nonce (responses)
+    /// - encrypted_message_length (2 bytes): Length of encrypted content
+    /// - encrypted_message (variable): The encrypted payload
+    ///
+    /// - Parameter bytes: The wire format data to parse
+    /// - Returns: `nil` if parsing fails or invalid message type
+    public init?(_ bytes: inout Data) {
+        guard
+            let typeRaw = bytes.popUInt8(),
+            let type = MessageType(rawValue: typeRaw),
+            let keyIDLength = bytes.popUInt16(),
+            let keyID = bytes.popFirst(Int(keyIDLength)),
+            let encryptedLength = bytes.popUInt16(),
+            let encrypted = bytes.popFirst(Int(encryptedLength))
+        else { return nil }
+
+        self.messageType = type
+        self.keyID = keyID
+        self.encryptedMessage = encrypted
+    }
+
+    /// Serialize ODoH message to wire format bytes.
+    ///
+    /// - Returns: The encoded message ready for network transmission
+    public func encode() -> Data {
+        var data = Data()
+        data.append(self.messageType.rawValue)  // 1 byte: message type
+        data.append(bigEndianBytes: UInt16(self.keyID.count))  // 2 bytes: key ID length
+        data.append(self.keyID)  // Variable: key ID/nonce
+        data.append(bigEndianBytes: UInt16(self.encryptedMessage.count))  // 2 bytes: encrypted length
+        data.append(self.encryptedMessage)  // Variable: encrypted data
+        return data
+    }
+}
+
+extension HPKE.KEM {
+    /// Create a public key instance from raw bytes for the specified KEM algorithm.
+    ///
+    /// This method handles the different public key formats used by various elliptic curves:
+    /// - **P-256, P-384, P-521**: Uncompressed point format (0x04 prefix + coordinates)
+    /// - **X25519**: Raw coordinate bytes (32 bytes)
+    ///
+    /// - Parameter data: The raw public key bytes in the appropriate format for this KEM
+    /// - Returns: A public key instance implementing `HPKEDiffieHellmanPublicKey`
+    /// - Throws: `CryptoKitError` if the key data is invalid for the chosen curve
+    internal func getPublicKey(data: Data) throws -> any HPKEDiffieHellmanPublicKey {
+        switch self {
+        case .P256_HKDF_SHA256:
+            return try P256.KeyAgreement.PublicKey(rawRepresentation: data)
+        case .P384_HKDF_SHA384:
+            return try P384.KeyAgreement.PublicKey(rawRepresentation: data)
+        case .P521_HKDF_SHA512:
+            return try P521.KeyAgreement.PublicKey(rawRepresentation: data)
+        case .Curve25519_HKDF_SHA256:
+            return try Curve25519.KeyAgreement.PublicKey(rawRepresentation: data)
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported KEM")
+        #endif
         }
     }
 }

@@ -12,6 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+import Foundation
+
 /// An error occured when adding oblivious encapsulation.
 public struct ObliviousXError: Error, Hashable {
     private var backing: Backing
@@ -26,10 +28,28 @@ public struct ObliviousXError: Error, Hashable {
     public static func unsupportedHPKEParameters() -> ObliviousXError {
         Self.init(backing: .unsupportedHPKEParameters)
     }
+
+    @inline(never)
+    public static func invalidODoHData() -> ObliviousXError {
+        Self.init(backing: .invalidODoHData)
+    }
+
+    @inline(never)
+    public static func invalidMessageType(expected: UInt8, actual: UInt8) -> ObliviousXError {
+        Self.init(backing: .invalidMessageType(expected, actual))
+    }
+
+    @inline(never)
+    public static func invalidPublicKey(kemID: UInt16, key: Data) -> ObliviousXError {
+        Self.init(backing: .invalidPublicKey(kemID, key))
+    }
 }
 
 extension ObliviousXError {
     enum Backing: Hashable, Sendable {
         case unsupportedHPKEParameters
+        case invalidODoHData
+        case invalidMessageType(UInt8, UInt8)
+        case invalidPublicKey(UInt16, Data)
     }
 }
