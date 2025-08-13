@@ -121,6 +121,119 @@ public struct ODoH: Sendable {
             return (message.encode(), context)
         }
 
+        /// Decrypt DNS response using HPKE context and derived keys.
+        ///
+        /// Uses HPKE secret export and HKDF to derive response decryption keys.
+        ///
+        /// - Parameters:
+        ///   - context: HPKE sender context from query encryption
+        ///   - queryPlain: Original query plaintext (used in key derivation)
+        ///   - responseData: Encrypted response from server
+        /// - Returns: Decrypted DNS response
+        public func decryptResponse(
+            context: HPKE.Sender,
+            queryPlain: MessagePlaintext,
+            responseData: Data
+        ) throws -> MessagePlaintext {
+            // Parse the response message
+            var responseData = responseData
+            guard let response = Message(&responseData) else {
+                throw ObliviousXError.invalidODoHData()
+            }
+
+            return try decryptResponse(context: context, queryPlain: queryPlain, response: response)
+        }
+
+        /// Decrypt DNS response using HPKE context and derived keys.
+        ///
+        /// Uses HPKE secret export and HKDF to derive response decryption keys.
+        ///
+        /// - Parameters:
+        ///   - context: HPKE sender context from query encryption
+        ///   - queryPlain: Original query plaintext (used in key derivation)
+        ///   - response: Encrypted response from server (in Message format)
+        /// - Returns: Decrypted DNS response
+        public func decryptResponse(
+            context: HPKE.Sender,
+            queryPlain: MessagePlaintext,
+            response: Message
+        ) throws -> MessagePlaintext {
+            guard response.messageType == .response else {
+                throw ObliviousXError.invalidMessageType(
+                    expected: Message.MessageType.response.rawValue,
+                    actual: response.messageType.rawValue
+                )
+            }
+
+            let responseNonce = response.keyID  // For responses, keyID field contains the nonce
+            let responseEncrypted = response.encryptedMessage
+
+            // Derive secrets according to RFC
+            let (aeadKey, aeadNonce) = try deriveSecrets(
+                secret: context.exportSecret(
+                    context: ODoHResponseInfo,
+                    outputByteCount: self.ct.aead.keyByteCount
+                ),
+                queryPlain: queryPlain.encode(),
+                responseNonce: responseNonce
+            )
+
+            // Build AAD for response
+            let aad = self.aad(.response, key: responseNonce)
+
+            // Decrypt using derived key/nonce (regular AEAD, not HPKE)
+            var plaintext = try self.ct.aead.open(
+                responseEncrypted,
+                nonce: aeadNonce,
+                authenticating: aad,
+                using: aeadKey
+            )
+
+            guard let messagePlaintext = MessagePlaintext(&plaintext) else {
+                throw ObliviousXError.invalidODoHData()
+            }
+            return messagePlaintext
+        }
+
+        /// Derive AEAD key and nonce for response encryption.
+        ///
+        /// Uses HKDF Extract-and-Expand with query plaintext and response nonce as salt.
+        /// Formula: Extract(Q_plain || len(nonce) || nonce, secret) → Expand for key/nonce.
+        ///
+        /// - Parameters:
+        ///   - secret: Exported secret from HPKE context
+        ///   - queryPlain: Original query plaintext
+        ///   - responseNonce: Server-generated nonce
+        /// - Returns: Derived AEAD key and nonce
+        private func deriveSecrets(
+            secret: SymmetricKey,
+            queryPlain: Data,
+            responseNonce: Data
+        ) throws -> (key: SymmetricKey, nonce: Data) {
+            // Build salt: Q_plain || len(resp_nonce) || resp_nonce
+            var salt = Data()
+            salt.append(queryPlain)
+            salt.append(bigEndianBytes: UInt16(responseNonce.count))
+            salt.append(responseNonce)
+
+            // Extract PRK
+            let prk = self.ct.kdf.extract(salt: salt, ikm: secret)
+
+            // Expand to get key and nonce
+            let key = self.ct.kdf.expand(
+                prk: prk,
+                info: ODoHKeyInfo,
+                outputByteCount: self.ct.aead.keyByteCount
+            )
+            let nonce = self.ct.kdf.expand(
+                prk: prk,
+                info: ODoHNonceInfo,
+                outputByteCount: self.ct.aead.nonceByteCount
+            )
+
+            return (key, Data(nonce))
+        }
+
         /// Construct Additional Authenticated Data (AAD) for AEAD operations.
         ///
         /// Format: message_type (1 byte) || key_length (2 bytes) || key_data
