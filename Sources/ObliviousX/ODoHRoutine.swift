@@ -49,6 +49,73 @@ private protocol ODoHCodable {
     func encode() -> Data
 }
 
+/// Implementation of Oblivious DNS over HTTPS (ODoH) as specified in RFC 9230.
+/// ```swift
+/// // CLIENT SIDE - Parse configurations and encrypt query
+///
+/// // 1. Fetch and parse configurations from target resolver's well-known endpoint
+/// var configData: Data = fetchConfigsFromWellKnown() // GET /.well-known/odohconfigs
+/// let configResults = ODoH.Configurations.parseWithDetails(&configData)
+/// guard configResults.hasValidConfigurations else {
+///     // Handle error
+/// }
+///
+/// // 2. Select preferred configuration (e.g., version 1)
+/// guard let selectedConfig = configs.first(version: 0x0001) else {
+///     // Handle error
+/// }
+///
+/// // 3. Initialize ODoH routine with selected configuration
+/// let clientRoutine = try ODoH.Routine(configuration: selectedConfig)
+///
+/// // 4. Create DNS query with padding for privacy
+/// let dnsQuery: Data = buildDNSQuery(domain: "example.com", type: .A)
+/// let queryPlaintext = ODoH.MessagePlaintext(dnsMessage: dnsQuery, paddingLength: 16)
+///
+/// // 5. Encrypt query for transmission through proxy
+/// let (encryptedQuery, senderContext) = try clientRoutine.encryptQuery(queryPlain: queryPlaintext)
+///
+/// // 6. Send encryptedQuery through proxy to target resolver...
+/// let encryptedResponse = sendThroughProxy(encryptedQuery, to: targetResolver)
+///
+/// // 7. Decrypt response when received back through proxy
+/// let responseMessage = try clientRoutine.decryptResponse(
+///     context: senderContext,
+///     queryPlain: queryPlaintext,
+///     responseMessage: encryptedResponse
+/// )
+/// let dnsResponse = responseMessage.dnsMessage
+///
+/// // SERVER SIDE - Create configuration, decrypt query, encrypt response
+///
+/// // 1. Server creates and publishes configuration
+/// let serverPrivateKey = Curve25519.KeyAgreement.PrivateKey()
+/// let serverConfig = try ODoH.Configuration.v1(privateKey: serverPrivateKey)
+/// let serverRoutine = try ODoH.Routine(configuration: serverConfig)
+///
+/// // 2. Publish configuration at well-known endpoint
+/// let configsToPublish: ODoH.Configurations = [serverConfig]
+/// serveAtWellKnown(configsToPublish.encode()) // Serve at /.well-known/odohconfigs
+///
+/// // 3. Decrypt incoming query from proxy
+/// let (decryptedQuery, recipientContext) = try serverRoutine.decryptQuery(
+///     queryMessage: encryptedQuery,
+///     privateKey: serverPrivateKey
+/// )
+///
+/// // 4. Process the DNS query
+/// let dnsAnswer = resolveDNSQuery(decryptedQuery.dnsMessage)
+/// let responsePayload = ODoH.MessagePlaintext(dnsMessage: dnsAnswer, paddingLength: 0)
+///
+/// // 5. Encrypt response for client
+/// let encryptedResponse = try serverRoutine.encryptResponse(
+///     recepient: recipientContext,
+///     queryPlain: decryptedQuery,
+///     responsePlain: responsePayload
+/// )
+///
+/// // 6. Send encrypted response back through proxy to client...
+/// ```
 public struct ODoH: Sendable {
     public struct Routine {
         public private(set) var ct: HPKE.Ciphersuite
