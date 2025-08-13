@@ -5,6 +5,47 @@ import XCTest
 @testable import ObliviousX
 
 final class ObliviousDoHTests: XCTestCase {
+    func testObliviousDoHRoundtrip() throws {
+        let request = "Hello world!"
+        let responseText = "Hello from ObliviousX"
+
+        let serverPrivateKey = Curve25519.KeyAgreement.PrivateKey.init()
+        let configuration = try ODoH.Configuration.v1(privateKey: serverPrivateKey)
+
+        let routine = try ODoH.Routine(configuration: configuration)
+
+        let query = ODoH.MessagePlaintext(dnsMessage: Data(request.utf8), paddingLength: 128)
+        let (encryptedQuery, clientContext) = try routine.encryptQuery(
+            queryPlain: query
+        )
+
+        XCTAssertNotEqual(query.encode(), encryptedQuery)
+
+        let (decryptedQuery, serverContext) = try routine.decryptQuery(
+            queryData: encryptedQuery,
+            privateKey: serverPrivateKey
+        )
+
+        XCTAssertEqual(query, decryptedQuery)
+
+        let response = ODoH.MessagePlaintext(dnsMessage: Data(responseText.utf8), paddingLength: 64)
+        let encryptedResponse = try routine.encryptResponse(
+            recepient: serverContext,
+            queryPlain: query,  // Need original query for key derivation
+            responsePlain: response
+        )
+
+        XCTAssertNotEqual(response.encode(), encryptedResponse)
+
+        // 4. Client decrypts response
+        let decryptedResponse = try routine.decryptResponse(
+            context: clientContext,
+            queryPlain: query,
+            responseData: encryptedResponse
+        )
+        XCTAssertEqual(response, decryptedResponse)
+    }
+
     func testConfigurationsParsing() throws {
         // Configuration grabbed from odoh.cloudflare-dns.com/.well-known/odohconfigs
         let configurationsBytes: [UInt8] = [

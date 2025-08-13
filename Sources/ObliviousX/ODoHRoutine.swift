@@ -260,6 +260,63 @@ public struct ODoH: Sendable {
             return (messagePlaintext, context)
         }
 
+        /// Encrypt DNS response using derived keys from HPKE context.
+        ///
+        /// Uses HPKE secret export and random nonce for stateless operation.
+        ///
+        /// - Parameters:
+        ///   - recepient: HPKE recipient context from query decryption
+        ///   - queryPlain: Original query (used in key derivation)
+        ///   - responsePlain: DNS response to encrypt
+        /// - Returns: Encrypted response message
+        public func encryptResponse(
+            recepient: HPKE.Recipient,
+            queryPlain: MessagePlaintext,
+            responsePlain: MessagePlaintext
+        ) throws -> Data {
+            // Generate response nonce: random(max(Nn, Nk))
+            let nonceSize = self.ct.aead.nonceByteCount
+            let keySize = self.ct.aead.keyByteCount
+            let responseNonceSize = max(nonceSize, keySize)
+            let responseNonce = Data((0..<responseNonceSize).map { _ in UInt8.random(in: 0...255) })
+
+            // Derive secrets
+            let (aeadKey, aeadNonce) = try deriveSecrets(
+                secret: recepient.exportSecret(
+                    context: ODoHResponseInfo,
+                    outputByteCount: self.ct.aead.keyByteCount
+                ),
+                queryPlain: queryPlain.encode(),
+                responseNonce: responseNonce
+            )
+
+            // Encrypt response using derived keys (regular AEAD)
+            let encrypted = try self.ct.aead.seal(
+                responsePlain.encode(),
+                authenticating: self.aad(.response, key: responseNonce),
+                nonce: aeadNonce,
+                using: aeadKey
+            )
+
+            precondition(
+                encrypted.count <= UInt16.max,
+                """
+                Encrypted message size (encapsulatedKey + plaintext + AEAD tag) must not exceed 65535 bytes.
+                This limit is imposed by the ODoH wire format which uses UInt16 length fields
+                for the encrypted_message field in the Message structure.
+                """
+            )
+
+            // Build response message (reusing Message structure, keyID holds nonce for responses)
+            let message = Message(
+                messageType: .response,
+                keyID: responseNonce,
+                encryptedMessage: encrypted
+            )
+
+            return message.encode()
+        }
+
         /// Derive AEAD key and nonce for response encryption.
         ///
         /// Uses HKDF Extract-and-Expand with query plaintext and response nonce as salt.
