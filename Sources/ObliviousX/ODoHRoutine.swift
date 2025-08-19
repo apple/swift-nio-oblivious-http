@@ -120,7 +120,7 @@ private protocol ODoHCodable {
 ///
 /// // 6. Send encrypted response back through proxy to client...
 /// ```
-public struct ODoH: Sendable {
+public enum ODoH: Sendable {
     public struct Routine {
         public private(set) var ct: HPKE.Ciphersuite
         public private(set) var pkR: any HPKEDiffieHellmanPublicKey
