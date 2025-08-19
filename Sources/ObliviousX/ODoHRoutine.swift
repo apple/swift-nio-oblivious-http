@@ -12,7 +12,11 @@
 //
 //===----------------------------------------------------------------------===//
 @preconcurrency import Crypto
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 
 /// Context strings used in HPKE key derivation for different purposes in ODoH protocol.
 /// These strings provide domain separation to ensure keys derived for different purposes
