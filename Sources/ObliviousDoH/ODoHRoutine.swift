@@ -19,6 +19,16 @@ import FoundationEssentials
 import Foundation
 #endif
 
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+@preconcurrency import Glibc
+#elseif canImport(Musl)
+@preconcurrency import Musl
+#elseif canImport(Android)
+@preconcurrency import Android
+#endif
+
 /// Context strings used in HPKE key derivation for different purposes in ODoH protocol.
 /// These strings provide domain separation to ensure keys derived for different purposes
 /// are cryptographically independent, as required by RFC 9230 Section 6.2.
