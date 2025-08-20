@@ -71,16 +71,24 @@ let package = Package(
         .target(
             name: "ObliviousX",
             dependencies: [
-                .product(name: "Crypto", package: "swift-crypto")
+                .product(name: "Crypto", package: "swift-crypto"),
+                "ObliviousXHelpers",
             ],
             swiftSettings: strictConcurrencySettings
         ),
         .target(
             name: "ObliviousDoH",
             dependencies: [
-                .product(name: "Crypto", package: "swift-crypto")
+                .product(name: "Crypto", package: "swift-crypto"),
+                "ObliviousXHelpers",
             ],
             swiftSettings: strictConcurrencySettings
+        ),
+        .target(
+            name: "ObliviousXHelpers",
+            dependencies: [
+                .product(name: "Crypto", package: "swift-crypto")
+            ]
         ),
         .testTarget(
             name: "ObliviousHTTPTests",
