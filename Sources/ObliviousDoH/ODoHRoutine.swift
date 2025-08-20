@@ -12,6 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 @preconcurrency import Crypto
+
 #if canImport(FoundationEssentials)
 import FoundationEssentials
 #else
@@ -37,22 +38,6 @@ let ODoHKeyInfo = Data("odoh key".utf8)
 /// Used to derive the AEAD nonce for encrypting/decrypting DNS responses
 let ODoHNonceInfo = Data("odoh nonce".utf8)
 
-/// Protocol for types that can be serialized to and from ODoH wire format.
-///
-/// Provides bidirectional conversion between Swift types and their network representation
-/// as specified in RFC 9230. All ODoH message types implement this protocol to enable
-/// consistent serialization and parsing across the protocol stack.
-private protocol ODoHCodable {
-    /// Initialize from wire format bytes, consuming data as it parses
-    /// - Parameter bytes: The raw network data to parse (consumed during parsing)
-    /// - Returns: `nil` if parsing fails or data is invalid
-    init?(_ bytes: inout Data)
-
-    /// Serialize to wire format bytes
-    /// - Returns: The encoded data ready for network transmission
-    func encode() -> Data
-}
-
 /// Implementation of Oblivious DNS over HTTPS (ODoH) as specified in RFC 9230.
 /// ```swift
 /// // CLIENT SIDE - Parse configurations and encrypt query
@@ -77,14 +62,14 @@ private protocol ODoHCodable {
 /// let queryPlaintext = ODoH.MessagePlaintext(dnsMessage: dnsQuery, paddingLength: 16)
 ///
 /// // 5. Encrypt query for transmission through proxy
-/// let (encryptedQuery, senderContext) = try clientRoutine.encryptQuery(queryPlain: queryPlaintext)
+/// let queryResult = try clientRoutine.encryptQuery(queryPlain: queryPlaintext)
 ///
 /// // 6. Send encryptedQuery through proxy to target resolver...
-/// let encryptedResponse = sendThroughProxy(encryptedQuery, to: targetResolver)
+/// let encryptedResponse = sendThroughProxy(queryResult.encryptedQuery, to: targetResolver)
 ///
 /// // 7. Decrypt response when received back through proxy
 /// let responseMessage = try clientRoutine.decryptResponse(
-///     context: senderContext,
+///     context: queryResult.context,
 ///     queryPlain: queryPlaintext,
 ///     responseMessage: encryptedResponse
 /// )
@@ -102,19 +87,19 @@ private protocol ODoHCodable {
 /// serveAtWellKnown(configsToPublish.encode()) // Serve at /.well-known/odohconfigs
 ///
 /// // 3. Decrypt incoming query from proxy
-/// let (decryptedQuery, recipientContext) = try serverRoutine.decryptQuery(
+/// let queryResult = try serverRoutine.decryptQuery(
 ///     queryMessage: encryptedQuery,
 ///     privateKey: serverPrivateKey
 /// )
 ///
 /// // 4. Process the DNS query
-/// let dnsAnswer = resolveDNSQuery(decryptedQuery.dnsMessage)
+/// let dnsAnswer = resolveDNSQuery(queryResult.plaintextQuery.dnsMessage)
 /// let responsePayload = ODoH.MessagePlaintext(dnsMessage: dnsAnswer, paddingLength: 0)
 ///
 /// // 5. Encrypt response for client
 /// let encryptedResponse = try serverRoutine.encryptResponse(
-///     recepient: recipientContext,
-///     queryPlain: decryptedQuery,
+///     recepient: queryResult.context,
+///     queryPlain: queryResult.plaintextQuery,
 ///     responsePlain: responsePayload
 /// )
 ///
@@ -122,9 +107,9 @@ private protocol ODoHCodable {
 /// ```
 public enum ODoH: Sendable {
     public struct Routine {
-        public private(set) var ct: HPKE.Ciphersuite
-        public private(set) var pkR: any HPKEDiffieHellmanPublicKey
-        public private(set) var keyID: Data
+        private var ct: HPKE.Ciphersuite
+        private var pkR: any HPKEDiffieHellmanPublicKey
+        private var keyID: Data
 
         /// Initialize ODoH encryption with target server configuration.
         ///
@@ -135,7 +120,10 @@ public enum ODoH: Sendable {
         /// - Parameter configuration: Target server's ODoH configuration
         /// - Throws: `CryptoKitError` if public key format is invalid
         public init(configuration: Configuration) throws {
-            precondition(configuration.contents.aead != .exportOnly)
+            guard configuration.contents.aead != .exportOnly else {
+                throw ObliviousDoHError.unsupportedHPKEParameters()
+            }
+
             self.ct = HPKE.Ciphersuite(
                 kem: configuration.contents.kem,
                 kdf: configuration.contents.kdf,
@@ -150,14 +138,10 @@ public enum ODoH: Sendable {
         /// Returns encrypted message and sender context needed for response decryption.
         ///
         /// - Parameter queryPlain: DNS query with padding
-        /// - Returns: Encrypted query data and HPKE sender context
-        /// - Precondition: Encrypted message size (plaintext + AEAD tag)
-        ///     must not exceed 65535 bytes due to wire format limitation
+        /// - Returns: Query encryption result containing encrypted data and context
         public func encryptQuery(
             queryPlain: MessagePlaintext
-        ) throws -> (
-            encryptedQuery: Data, context: HPKE.Sender
-        ) {
+        ) throws -> QueryEncryptionResult {
             var context = try HPKE.Sender(
                 recipientKey: self.pkR,
                 ciphersuite: self.ct,
@@ -166,7 +150,7 @@ public enum ODoH: Sendable {
 
             let sealedData = try context.seal(
                 queryPlain.encode(),
-                authenticating: self.aad(.query, key: self.keyID)
+                authenticating: self.aad(.query(), key: self.keyID)
             )
             let encapsulatedKey = context.encapsulatedKey
 
@@ -174,45 +158,17 @@ public enum ODoH: Sendable {
             encryptedMessage.append(encapsulatedKey)
             encryptedMessage.append(sealedData)
 
-            precondition(
-                encryptedMessage.count <= UInt16.max,
-                """
-                Encrypted message size (encapsulatedKey + plaintext + AEAD tag) must not exceed 65535 bytes.
-                This limit is imposed by the ODoH wire format which uses UInt16 length fields
-                for the encrypted_message field in the Message structure.
-                """
-            )
+            guard encryptedMessage.count <= UInt16.max else {
+                throw ObliviousDoHError.invalidODoHLength(length: encryptedMessage.count)
+            }
 
             let message = Message(
-                messageType: .query,
+                messageType: .query(),
                 keyID: self.keyID,
                 encryptedMessage: encryptedMessage
             )
 
-            return (message.encode(), context)
-        }
-
-        /// Decrypt DNS response using HPKE context and derived keys.
-        ///
-        /// Uses HPKE secret export and HKDF to derive response decryption keys.
-        ///
-        /// - Parameters:
-        ///   - context: HPKE sender context from query encryption
-        ///   - queryPlain: Original query plaintext (used in key derivation)
-        ///   - responseData: Encrypted response from server
-        /// - Returns: Decrypted DNS response
-        public func decryptResponse(
-            context: HPKE.Sender,
-            queryPlain: MessagePlaintext,
-            responseData: Data
-        ) throws -> MessagePlaintext {
-            // Parse the response message
-            var responseData = responseData
-            guard let response = Message(&responseData) else {
-                throw ObliviousXError.invalidODoHData()
-            }
-
-            return try decryptResponse(context: context, queryPlain: queryPlain, response: response)
+            return QueryEncryptionResult(encryptedQuery: message.encode(), context: context)
         }
 
         /// Decrypt DNS response using HPKE context and derived keys.
@@ -229,10 +185,10 @@ public enum ODoH: Sendable {
             queryPlain: MessagePlaintext,
             response: Message
         ) throws -> MessagePlaintext {
-            guard response.messageType == .response else {
-                throw ObliviousXError.invalidMessageType(
-                    expected: Message.MessageType.response.rawValue,
-                    actual: response.messageType.rawValue
+            guard response.messageType == .response() else {
+                throw ObliviousDoHError.invalidMessageType(
+                    expected: .response(),
+                    actual: response.messageType
                 )
             }
 
@@ -240,7 +196,7 @@ public enum ODoH: Sendable {
             let responseEncrypted = response.encryptedMessage
 
             // Derive secrets according to RFC
-            let (aeadKey, aeadNonce) = try deriveSecrets(
+            let (aeadKey, aeadNonce) = try self.deriveSecrets(
                 secret: context.exportSecret(
                     context: ODoHResponseInfo,
                     outputByteCount: self.ct.aead.keyByteCount
@@ -250,7 +206,7 @@ public enum ODoH: Sendable {
             )
 
             // Build AAD for response
-            let aad = self.aad(.response, key: responseNonce)
+            let aad = self.aad(.response(), key: responseNonce)
 
             // Decrypt using derived key/nonce (regular AEAD, not HPKE)
             var plaintext = try self.ct.aead.open(
@@ -261,30 +217,73 @@ public enum ODoH: Sendable {
             )
 
             guard let messagePlaintext = MessagePlaintext(&plaintext) else {
-                throw ObliviousXError.invalidODoHData()
+                throw ObliviousDoHError.invalidODoHData()
             }
             return messagePlaintext
         }
 
-        /// Decrypt DNS query using server's private key.
+        /// Decrypt DNS response using HPKE context and derived keys.
         ///
-        /// Establishes HPKE recipient context needed for response encryption.
+        /// Uses HPKE secret export and HKDF to derive response decryption keys.
         ///
         /// - Parameters:
-        ///   - queryData: Encrypted query from proxy
-        ///   - privateKey: Server's private key
-        /// - Returns: Decrypted query and HPKE recipient context
-        public func decryptQuery<PrivateKey: HPKEDiffieHellmanPrivateKey>(
-            queryData: Data,
-            privateKey: PrivateKey
-        ) throws -> (plaintext: MessagePlaintext, context: HPKE.Recipient) {
-            // Parse the query message
-            var queryData = queryData
-            guard let query = Message(&queryData) else {
-                throw ObliviousXError.invalidODoHData()
+        ///   - context: HPKE sender context from query encryption
+        ///   - queryPlain: Original query plaintext (used in key derivation)
+        ///   - responseData: Encrypted response from server
+        /// - Returns: Decrypted DNS response
+        public func decryptResponse(
+            context: HPKE.Sender,
+            queryPlain: MessagePlaintext,
+            responseData: consuming Data
+        ) throws -> MessagePlaintext {
+            // Parse the response message
+            guard let response = Message(&responseData) else {
+                throw ObliviousDoHError.invalidODoHData()
             }
 
-            return try decryptQuery(query: query, privateKey: privateKey)
+            return try self.decryptResponse(context: context, queryPlain: queryPlain, response: response)
+        }
+
+        /// Decrypt DNS response using query encryption result.
+        ///
+        /// Convenience method that extracts the context and encrypted query from a QueryEncryptionResult.
+        ///
+        /// - Parameters:
+        ///   - queryResult: Result from encrypting the original query
+        ///   - queryPlain: Original query plaintext (used in key derivation)
+        ///   - responseData: Encrypted response from server
+        /// - Returns: Decrypted DNS response
+        public func decryptResponse(
+            queryEncryptionResult: QueryEncryptionResult,
+            queryPlain: MessagePlaintext,
+            responseData: consuming Data
+        ) throws -> MessagePlaintext {
+            try self.decryptResponse(
+                context: queryEncryptionResult.context,
+                queryPlain: queryPlain,
+                responseData: responseData
+            )
+        }
+
+        /// Decrypt DNS response using query encryption result.
+        ///
+        /// Convenience method that extracts the context and encrypted query from a QueryEncryptionResult.
+        ///
+        /// - Parameters:
+        ///   - queryResult: Result from encrypting the original query
+        ///   - queryPlain: Original query plaintext (used in key derivation)
+        ///   - response: Encrypted response from server (in Message format)
+        /// - Returns: Decrypted DNS response
+        public func decryptResponse(
+            queryEncryptionResult: QueryEncryptionResult,
+            queryPlain: MessagePlaintext,
+            response: Message
+        ) throws -> MessagePlaintext {
+            try self.decryptResponse(
+                context: queryEncryptionResult.context,
+                queryPlain: queryPlain,
+                response: response
+            )
         }
 
         /// Decrypt DNS query using server's private key.
@@ -294,15 +293,15 @@ public enum ODoH: Sendable {
         /// - Parameters:
         ///   - query: Encrypted query from proxy
         ///   - privateKey: Server's private key
-        /// - Returns: Decrypted query and HPKE recipient context
+        /// - Returns: Query decryption result containing plaintext and context
         public func decryptQuery<PrivateKey: HPKEDiffieHellmanPrivateKey>(
             query: Message,
             privateKey: PrivateKey
-        ) throws -> (plaintext: MessagePlaintext, context: HPKE.Recipient) {
-            guard query.messageType == .query else {
-                throw ObliviousXError.invalidMessageType(
-                    expected: Message.MessageType.query.rawValue,
-                    actual: query.messageType.rawValue
+        ) throws -> QueryDecryptionResult {
+            guard query.messageType == .query() else {
+                throw ObliviousDoHError.invalidMessageType(
+                    expected: .query(),
+                    actual: query.messageType
                 )
             }
 
@@ -322,13 +321,33 @@ public enum ODoH: Sendable {
             // Decrypt query
             var plaintext = try context.open(
                 ciphertext,
-                authenticating: self.aad(.query, key: self.keyID)
+                authenticating: self.aad(.query(), key: self.keyID)
             )
 
             guard let messagePlaintext = MessagePlaintext(&plaintext) else {
-                throw ObliviousXError.invalidODoHData()
+                throw ObliviousDoHError.invalidODoHData()
             }
-            return (messagePlaintext, context)
+            return QueryDecryptionResult(plaintextQuery: messagePlaintext, context: context)
+        }
+
+        /// Decrypt DNS query using server's private key.
+        ///
+        /// Establishes HPKE recipient context needed for response encryption.
+        ///
+        /// - Parameters:
+        ///   - queryData: Encrypted query from proxy
+        ///   - privateKey: Server's private key
+        /// - Returns: Query decryption result containing plaintext and context
+        public func decryptQuery<PrivateKey: HPKEDiffieHellmanPrivateKey>(
+            queryData: consuming Data,
+            privateKey: PrivateKey
+        ) throws -> QueryDecryptionResult {
+            // Parse the query message
+            guard let query = Message(&queryData) else {
+                throw ObliviousDoHError.invalidODoHData()
+            }
+
+            return try self.decryptQuery(query: query, privateKey: privateKey)
         }
 
         /// Encrypt DNS response using derived keys from HPKE context.
@@ -336,12 +355,12 @@ public enum ODoH: Sendable {
         /// Uses HPKE secret export and random nonce for stateless operation.
         ///
         /// - Parameters:
-        ///   - recepient: HPKE recipient context from query decryption
+        ///   - recipient: HPKE recipient context from query decryption
         ///   - queryPlain: Original query (used in key derivation)
         ///   - responsePlain: DNS response to encrypt
         /// - Returns: Encrypted response message
         public func encryptResponse(
-            recepient: HPKE.Recipient,
+            recipient: HPKE.Recipient,
             queryPlain: MessagePlaintext,
             responsePlain: MessagePlaintext
         ) throws -> Data {
@@ -352,8 +371,8 @@ public enum ODoH: Sendable {
             let responseNonce = Data((0..<responseNonceSize).map { _ in UInt8.random(in: 0...255) })
 
             // Derive secrets
-            let (aeadKey, aeadNonce) = try deriveSecrets(
-                secret: recepient.exportSecret(
+            let (aeadKey, aeadNonce) = try self.deriveSecrets(
+                secret: recipient.exportSecret(
                     context: ODoHResponseInfo,
                     outputByteCount: self.ct.aead.keyByteCount
                 ),
@@ -364,28 +383,42 @@ public enum ODoH: Sendable {
             // Encrypt response using derived keys (regular AEAD)
             let encrypted = try self.ct.aead.seal(
                 responsePlain.encode(),
-                authenticating: self.aad(.response, key: responseNonce),
+                authenticating: self.aad(.response(), key: responseNonce),
                 nonce: aeadNonce,
                 using: aeadKey
             )
 
-            precondition(
-                encrypted.count <= UInt16.max,
-                """
-                Encrypted message size (encapsulatedKey + plaintext + AEAD tag) must not exceed 65535 bytes.
-                This limit is imposed by the ODoH wire format which uses UInt16 length fields
-                for the encrypted_message field in the Message structure.
-                """
-            )
+            guard encrypted.count <= UInt16.max else {
+                throw ObliviousDoHError.invalidODoHLength(length: encrypted.count)
+            }
 
             // Build response message (reusing Message structure, keyID holds nonce for responses)
             let message = Message(
-                messageType: .response,
+                messageType: .response(),
                 keyID: responseNonce,
                 encryptedMessage: encrypted
             )
 
             return message.encode()
+        }
+
+        /// Encrypt DNS response using query decryption result.
+        ///
+        /// Convenience method that uses the context and plaintext from a QueryDecryptionResult.
+        ///
+        /// - Parameters:
+        ///   - queryResult: Result from decrypting the original query
+        ///   - responsePlain: DNS response to encrypt
+        /// - Returns: Encrypted response message
+        public func encryptResponse(
+            queryDecryptionResult: QueryDecryptionResult,
+            responsePlain: MessagePlaintext
+        ) throws -> Data {
+            try self.encryptResponse(
+                recipient: queryDecryptionResult.context,
+                queryPlain: queryDecryptionResult.plaintextQuery,
+                responsePlain: responsePlain
+            )
         }
 
         /// Derive AEAD key and nonce for response encryption.
@@ -405,6 +438,7 @@ public enum ODoH: Sendable {
         ) throws -> (key: SymmetricKey, nonce: Data) {
             // Build salt: Q_plain || len(resp_nonce) || resp_nonce
             var salt = Data()
+            salt.reserveCapacity(queryPlain.count + 2 + responseNonce.count)
             salt.append(queryPlain)
             salt.append(bigEndianBytes: UInt16(responseNonce.count))
             salt.append(responseNonce)
@@ -436,11 +470,47 @@ public enum ODoH: Sendable {
         ///   - key: Key identifier or response nonce
         /// - Returns: AAD bytes for AEAD operations
         private func aad(_ type: Message.MessageType, key: Data) -> Data {
-            var aad = Data([type.rawValue])
+            var aad = Data()
             let keyLength = UInt16(key.count)
+            aad.reserveCapacity(1 + 2 + key.count)
+            aad.append(type.rawValue)
             aad.append(bigEndianBytes: keyLength)
             aad.append(key)
             return aad
+        }
+    }
+
+    // - MARK: Protocol Types
+
+    /// Result of encrypting a DNS query for transmission through a proxy.
+    ///
+    /// Contains the encrypted query data and the HPKE sender context needed
+    /// for decrypting the corresponding response from the server.
+    public struct QueryEncryptionResult: Sendable {
+        /// The encrypted query message ready for network transmission
+        public let encryptedQuery: Data
+        /// HPKE sender context required for response decryption
+        public let context: HPKE.Sender
+
+        internal init(encryptedQuery: Data, context: HPKE.Sender) {
+            self.encryptedQuery = encryptedQuery
+            self.context = context
+        }
+    }
+
+    /// Result of decrypting a DNS query received from a proxy.
+    ///
+    /// Contains the decrypted query plaintext and the HPKE recipient context
+    /// needed for encrypting the corresponding response back to the client.
+    public struct QueryDecryptionResult: Sendable {
+        /// The decrypted DNS query message
+        public let plaintextQuery: MessagePlaintext
+        /// HPKE recipient context required for response encryption
+        public let context: HPKE.Recipient
+
+        internal init(plaintextQuery: MessagePlaintext, context: HPKE.Recipient) {
+            self.plaintextQuery = plaintextQuery
+            self.context = context
         }
     }
 
@@ -451,16 +521,32 @@ public enum ODoH: Sendable {
     /// which configurations are supported.
     public struct ConfigurationParsingResult: Sendable {
         public let validConfigurations: ODoH.Configurations
-        public let failedConfigurations: [(rawData: Data, error: ObliviousXError)]
+        public let failedConfigurations: [(rawData: Data, error: ObliviousDoHError)]
         public var hasValidConfigurations: Bool { !validConfigurations.isEmpty }
 
         internal init(
             validConfigurations: ODoH.Configurations,
-            failedConfigurations: [(rawData: Data, error: ObliviousXError)]
+            failedConfigurations: [(rawData: Data, error: ObliviousDoHError)]
         ) {
             self.validConfigurations = validConfigurations
             self.failedConfigurations = failedConfigurations
         }
+    }
+
+    /// Protocol for types that can be serialized to and from ODoH wire format.
+    ///
+    /// Provides bidirectional conversion between Swift types and their network representation
+    /// as specified in RFC 9230. All ODoH message types implement this protocol to enable
+    /// consistent serialization and parsing across the protocol stack.
+    public protocol Codable {
+        /// Initialize from wire format bytes, consuming data as it parses
+        /// - Parameter bytes: The raw network data to parse (consumed during parsing)
+        /// - Returns: `nil` if parsing fails or data is invalid
+        init?(_ bytes: inout Data)
+
+        /// Serialize to wire format bytes
+        /// - Returns: The encoded data ready for network transmission
+        func encode() throws -> Data
     }
 
     /// Collection of ODoH configurations published by servers.
@@ -468,24 +554,61 @@ public enum ODoH: Sendable {
     /// Served at /.well-known/odohconfigs for client discovery.
     public typealias Configurations = [Configuration]
 
+    /// Protocol for configuration contents that can vary by version
+    /// Guarantees HPKE-required properties that should be stable across versions
+    public protocol ConfigurationContentsProtocol: Sendable, Equatable, Hashable, ODoH.Codable {
+        var kem: HPKE.KEM { get }
+        var kdf: HPKE.KDF { get }
+        var aead: HPKE.AEAD { get }
+        var publicKey: Data { get }
+
+        var length: Int { get }
+        var identifier: Data { get }
+
+        /// Parse configuration contents with detailed error information.
+        ///
+        /// This method provides comprehensive error information when configuration contents parsing fails,
+        /// allowing callers to understand exactly what went wrong during parsing.
+        ///
+        /// - Parameter bytes: The wire format data to parse
+        /// - Returns: Result containing either valid configuration contents or detailed error information
+        static func parseWithDetails(_ bytes: inout Data) -> Result<Self, ObliviousDoHError>
+    }
+
     /// Configuration for ODoH operations containing the target resolver's public key and cryptographic parameters.
     ///
     /// This configuration is typically obtained from the target resolver's well-known endpoint (/.well-known/odohconfigs)
     /// and contains all necessary parameters to encrypt DNS queries that only the target resolver can decrypt.
     /// Multiple configurations may be provided by servers to support different algorithm suites or key rotation.
     public struct Configuration: Sendable {
-        public private(set) var version: UInt16
-        // length prefix (UInt16)
-        public private(set) var contents: ConfigurationContents
+        internal enum ContentsBacking: Equatable, Hashable, Sendable {
+            case v1(ConfigurationContents)
 
-        /// Creates a new ODoH configuration with specified version and contents.
+            var version: Int {
+                switch self {
+                case .v1:
+                    return 0x0001
+                }
+            }
+        }
+        internal private(set) var contentsBacking: ContentsBacking
+
+        public var version: Int {
+            contentsBacking.version
+        }
+        // length prefix (UInt16)
+        public var contents: any ConfigurationContentsProtocol {
+            switch contentsBacking {
+            case .v1(let contents):
+                return contents
+            }
+        }
+
+        /// Creates a new ODoH configuration with the specified contents backing.
         ///
-        /// - Parameters:
-        ///   - version: Protocol version number (0x0001 for RFC 9230)
-        ///   - contents: Configuration contents with algorithms and public key
-        internal init(version: UInt16, contents: ConfigurationContents) {
-            self.version = version
-            self.contents = contents
+        /// - Parameter contentsBacking: The version-specific contents backing
+        internal init(contentsBacking: ContentsBacking) {
+            self.contentsBacking = contentsBacking
         }
 
         /// Create ODoH v1 configuration with standard algorithm suite.
@@ -498,15 +621,13 @@ public enum ODoH: Sendable {
         /// - Throws: `CryptoKitError` if key serialization fails
         public static func v1(privateKey: Curve25519.KeyAgreement.PrivateKey) throws -> Self {
             let kem: HPKE.KEM = .Curve25519_HKDF_SHA256
-            return .init(
-                version: 0x0001,
-                contents: .init(
-                    kem: kem,
-                    kdf: .HKDF_SHA256,
-                    aead: .AES_GCM_128,
-                    publicKey: try privateKey.publicKey.hpkeRepresentation(kem: kem)
-                )
+            let contents = ConfigurationContents(
+                kem: kem,
+                kdf: .HKDF_SHA256,
+                aead: .AES_GCM_128,
+                publicKey: try privateKey.publicKey.hpkeRepresentation(kem: kem)
             )
+            return .init(contentsBacking: .v1(contents))
         }
     }
 
@@ -515,12 +636,12 @@ public enum ODoH: Sendable {
     /// Contains the essential parameters needed for ODoH operations: the HPKE algorithm
     /// identifiers and the target server's public key. This structure is embedded within
     /// the versioned Configuration wrapper for wire format transmission.
-    public struct ConfigurationContents: Sendable {
-        public private(set) var kem: HPKE.KEM
-        public private(set) var kdf: HPKE.KDF
-        public private(set) var aead: HPKE.AEAD
+    public struct ConfigurationContents: ConfigurationContentsProtocol {
+        public let kem: HPKE.KEM
+        public let kdf: HPKE.KDF
+        public let aead: HPKE.AEAD
         // length prefix (UInt16)
-        public private(set) var publicKey: Data
+        public let publicKey: Data
 
         internal init(kem: HPKE.KEM, kdf: HPKE.KDF, aead: HPKE.AEAD, publicKey: Data) {
             self.kem = kem
@@ -533,7 +654,7 @@ public enum ODoH: Sendable {
         ///
         /// Calculates the sum of all field sizes: KEM ID (2) + KDF ID (2) +
         /// AEAD ID (2) + public key length field (2) + public key data length.
-        var length: Int {
+        public var length: Int {
             2 + 2 + 2 + 2 + publicKey.count
         }
 
@@ -544,7 +665,7 @@ public enum ODoH: Sendable {
         /// in protocol messages to reference the specific key configuration.
         ///
         /// Formula: Expand(Extract("", contents), "odoh key id", Nh)
-        var identifier: Data {
+        public var identifier: Data {
             Data(
                 self.kdf.expand(
                     prk: self.kdf.extract(salt: Data(), ikm: .init(data: self.encode())),
@@ -562,9 +683,9 @@ public enum ODoH: Sendable {
     /// The padding consists of zero bytes that are validated during decryption to ensure integrity.
     public struct MessagePlaintext: Equatable, Sendable {
         // length prefix (UInt16)
-        public private(set) var dnsMessage: Data
+        public var dnsMessage: Data
         // length prefix (UInt16)
-        public private(set) var padding: [UInt8]
+        public var paddingLength: Int
 
         /// Create plaintext message with DNS data and padding.
         ///
@@ -578,11 +699,11 @@ public enum ODoH: Sendable {
         ///   - paddingLength: Number of zero bytes to append as padding (0-65535)
         public init(dnsMessage: Data, paddingLength: Int = 0) {
             self.dnsMessage = dnsMessage
-            self.padding = .init(repeating: 0, count: paddingLength)
+            self.paddingLength = paddingLength
         }
 
         public var size: Int {
-            self.dnsMessage.count + self.padding.count
+            self.dnsMessage.count + self.paddingLength
         }
     }
 
@@ -600,16 +721,29 @@ public enum ODoH: Sendable {
         /// Distinguishes between client queries and server responses in the protocol.
         /// The message type affects how certain fields are interpreted and which
         /// cryptographic operations are applied.
-        enum MessageType: UInt8, Sendable {
-            /// Client DNS query encrypted for the target server
-            case query = 1
-            /// Server DNS response encrypted for the client
-            case response = 2
+        public struct MessageType: Equatable, Hashable, Sendable {
+            public let rawValue: UInt8
+
+            public static func query() -> Self {
+                Self(rawValue: 1)
+            }
+
+            public static func response() -> Self {
+                Self(rawValue: 2)
+            }
+
+            public static func other(_ rawValue: UInt8) -> Self {
+                Self(rawValue: rawValue)
+            }
+
+            init(rawValue: UInt8) {
+                self.rawValue = rawValue
+            }
         }
 
-        let messageType: MessageType
-        public internal(set) var keyID: Data
-        public internal(set) var encryptedMessage: Data
+        public var messageType: MessageType
+        public var keyID: Data
+        public var encryptedMessage: Data
 
         /// Create ODoH message with type, key/nonce, and encrypted payload.
         ///
@@ -621,21 +755,21 @@ public enum ODoH: Sendable {
         ///   - messageType: Whether this is a query or response
         ///   - keyID: Key identifier (queries) or response nonce (responses)
         ///   - encryptedMessage: The HPKE or AEAD encrypted payload
-        init(messageType: MessageType, keyID: Data, encryptedMessage: Data) {
+        public init(messageType: MessageType, keyID: Data, encryptedMessage: Data) {
             self.messageType = messageType
             self.keyID = keyID
             self.encryptedMessage = encryptedMessage
         }
 
         public var isResponse: Bool {
-            self.messageType == .response
+            self.messageType == .response()
         }
     }
 }
 
-// MARK: - ODoHCodable Implementations
+// MARK: - ODoH.Codable Implementations
 
-extension ODoH.Configurations: ODoHCodable {
+extension ODoH.Configurations: ODoH.Codable {
     /// Deserialize configurations collection from wire format bytes.
     ///
     /// **Wire Format:**
@@ -668,20 +802,21 @@ extension ODoH.Configurations: ODoHCodable {
     ///
     /// - Parameter bytes: The wire format data to parse
     /// - Returns: Complete parsing result with valid configurations and error details
-    public static func parseWithDetails(_ bytes: inout Data) -> ODoH.ConfigurationParsingResult {
+    public static func parseWithDetails(_ data: inout Data) -> ODoH.ConfigurationParsingResult {
         // Pop the entire structure from memory. To see if there was any errors structure of the Data first.
+        let fullData = data
         guard
-            let totalLength = bytes.popUInt16(),
-            var configsData = bytes.popFirst(Int(totalLength))
+            let totalLength = data.popUInt16(),
+            var configsData = data.popFirst(Int(totalLength))
         else {
             return ODoH.ConfigurationParsingResult(
                 validConfigurations: [],
-                failedConfigurations: [(bytes, .invalidODoHData())]
+                failedConfigurations: [(fullData, .invalidODoHData())]
             )
         }
 
         var validConfigs: ODoH.Configurations = []
-        var failedConfigs: [(rawData: Data, error: ObliviousXError)] = []
+        var failedConfigs: [(rawData: Data, error: ObliviousDoHError)] = []
 
         while !configsData.isEmpty {
             let beforeByteCount = configsData.count
@@ -692,7 +827,7 @@ extension ODoH.Configurations: ODoHCodable {
             case .success(let config):
                 validConfigs.append(config)
             case .failure(let error):
-                if error == ObliviousXError.invalidODoHData() {
+                if error == ObliviousDoHError.invalidODoHData() {
                     break
                 }
 
@@ -711,35 +846,42 @@ extension ODoH.Configurations: ODoHCodable {
     /// Serialize configurations collection to wire format bytes.
     ///
     /// - Returns: The encoded configurations ready for network transmission
-    public func encode() -> Data {
-        var configsData = Data()
+    public func encode() throws -> Data {
+        var length = 0
         for config in self {
-            configsData.append(config.encode())
+            length += 4 + config.contents.length
+        }
+
+        guard let configsLength = UInt16(exactly: length) else {
+            throw ObliviousDoHError.invalidODoHLength(length: length)
         }
 
         var data = Data()
-        data.append(bigEndianBytes: UInt16(configsData.count))  // 2 bytes: total length
-        data.append(configsData)  // Variable: concatenated configs
+        data.reserveCapacity(2 + length)
+        data.append(bigEndianBytes: configsLength)  // 2 bytes: total length
+
+        for config in self {
+            data.append(try config.encode())
+        }
+
         return data
     }
 
     /// Find the first configuration matching the specified version.
     ///
     /// Searches through the configurations collection and returns the first configuration
-    /// that matches the requested version. This is useful for version negotiation where
-    /// clients need to find a compatible configuration version.
+    /// that matches the requested version.
     ///
     /// - Parameter version: The version to search for
     /// - Returns: The first matching configuration, or `nil` if no configuration with that version exists
-    public func first(version: UInt16) -> ODoH.Configuration? {
+    public func first(version: Int) -> ODoH.Configuration? {
         self.first { $0.version == version }
     }
 
     /// Find the first configuration matching the specified key identifier.
     ///
     /// Searches through the configurations collection and returns the first configuration
-    /// that matches the requested key identifier. This is useful for selecting a specific
-    /// configuration when the client knows which key should be used for encryption.
+    /// that matches the requested key identifier.
     ///
     /// - Parameter keyID: The key identifier to search for
     /// - Returns: The first matching configuration, or `nil` if no configuration with that key ID exists
@@ -748,7 +890,7 @@ extension ODoH.Configurations: ODoHCodable {
     }
 }
 
-extension ODoH.Configuration: ODoHCodable {
+extension ODoH.Configuration: ODoH.Codable {
     /// Deserialize complete ODoH configuration from wire format bytes.
     ///
     /// **Wire Format:**
@@ -758,7 +900,7 @@ extension ODoH.Configuration: ODoHCodable {
     ///
     /// - Parameter bytes: The wire format data to parse
     /// - Returns: `nil` if parsing fails or version is unsupported
-    internal init?(_ bytes: inout Data) {
+    public init?(_ bytes: inout Data) {
         switch Self.parseWithDetails(&bytes) {
         case .success(let config):
             self = config
@@ -774,10 +916,10 @@ extension ODoH.Configuration: ODoHCodable {
     ///
     /// - Parameter bytes: The wire format data to parse
     /// - Returns: Result containing either a valid configuration or detailed error information
-    internal static func parseWithDetails(
+    public static func parseWithDetails(
         _ bytes: inout Data
     ) -> Result<
-        ODoH.Configuration, ObliviousXError
+        ODoH.Configuration, ObliviousDoHError
     > {
         // Pop the entire structure from memory. To see if there was any errors structure of the Data first.
         guard
@@ -788,30 +930,44 @@ extension ODoH.Configuration: ODoHCodable {
             return .failure(.invalidODoHData())
         }
 
-        let contentsResult = ODoH.ConfigurationContents.parseWithDetails(&contentsBytes)
-        switch contentsResult {
-        case .success(let contents):
-            let config = ODoH.Configuration(version: version, contents: contents)
-            return .success(config)
-        case .failure(let error):
-            return .failure(error)
+        // Check version first before trying to parse contents
+        let contentsBacking: ODoH.Configuration.ContentsBacking
+        switch Int(version) {
+        case 0x0001:
+            let contentsResult = ODoH.ConfigurationContents.parseWithDetails(&contentsBytes)
+            switch contentsResult {
+            case .success(let contents):
+                contentsBacking = .v1(contents)
+            case .failure(let error):
+                return .failure(error)
+            }
+        default:
+            return .failure(.unsupportedHPKEParameters())
         }
+
+        let config = ODoH.Configuration(contentsBacking: contentsBacking)
+        return .success(config)
     }
 
     /// Serialize complete configuration to wire format bytes.
     ///
     /// - Returns: The encoded configuration ready for network transmission
-    internal func encode() -> Data {
+    public func encode() throws -> Data {
+        guard let version = UInt16(exactly: self.version) else {
+            throw ObliviousDoHError.invalidODoHVersion(version: self.version)
+        }
+
         var data = Data()
-        let contentsData = self.contents.encode()
-        data.append(bigEndianBytes: self.version)  // 2 bytes: version
+        let contentsData = try self.contents.encode()
+        data.reserveCapacity(4 + contentsData.count)
+        data.append(bigEndianBytes: version)  // 2 bytes: version
         data.append(bigEndianBytes: UInt16(contentsData.count))  // 2 bytes: contents length
         data.append(contentsData)  // Variable: contents
         return data
     }
 }
 
-extension ODoH.ConfigurationContents: ODoHCodable {
+extension ODoH.ConfigurationContents: ODoH.Codable {
     /// Deserialize configuration contents from wire format bytes.
     ///
     /// **Wire Format:**
@@ -823,7 +979,7 @@ extension ODoH.ConfigurationContents: ODoHCodable {
     ///
     /// - Parameter bytes: The wire format data to parse
     /// - Returns: `nil` if parsing fails or unsupported algorithms are encountered
-    internal init?(_ bytes: inout Data) {
+    public init?(_ bytes: inout Data) {
         switch Self.parseWithDetails(&bytes) {
         case .success(let contents):
             self = contents
@@ -839,10 +995,10 @@ extension ODoH.ConfigurationContents: ODoHCodable {
     ///
     /// - Parameter bytes: The wire format data to parse
     /// - Returns: Result containing either valid configuration contents or detailed error information
-    internal static func parseWithDetails(
+    public static func parseWithDetails(
         _ bytes: inout Data
     ) -> Result<
-        ODoH.ConfigurationContents, ObliviousXError
+        ODoH.ConfigurationContents, ObliviousDoHError
     > {
         // As we have already popped the entirety of the configuration
         // contents we don't have to fail with .invalidODoHData.
@@ -860,6 +1016,11 @@ extension ODoH.ConfigurationContents: ODoHCodable {
             return .failure(.unsupportedHPKEParameters())
         }
 
+        // Ensure all bytes were consumed
+        guard bytes.isEmpty else {
+            return .failure(.invalidODoHData())
+        }
+
         // Try to validate the public key by attempting to create a key instance
         do {
             _ = try kem.getPublicKey(data: key)
@@ -874,8 +1035,9 @@ extension ODoH.ConfigurationContents: ODoHCodable {
     /// Serialize configuration contents to wire format bytes.
     ///
     /// - Returns: The encoded configuration contents ready for network transmission
-    internal func encode() -> Data {
+    public func encode() -> Data {
         var data = Data()
+        data.reserveCapacity(8 + self.publicKey.count)
         data.append(self.kem.identifier)  // 2 bytes: KEM ID
         data.append(self.kdf.identifier)  // 2 bytes: KDF ID
         data.append(self.aead.identifier)  // 2 bytes: AEAD ID
@@ -885,7 +1047,7 @@ extension ODoH.ConfigurationContents: ODoHCodable {
     }
 }
 
-extension ODoH.MessagePlaintext: ODoHCodable {
+extension ODoH.MessagePlaintext: ODoH.Codable {
     /// Deserialize plaintext message from wire format bytes.
     ///
     /// **Wire Format:**
@@ -896,7 +1058,7 @@ extension ODoH.MessagePlaintext: ODoHCodable {
     ///
     /// - Parameter bytes: The wire format data to parse
     /// - Returns: `nil` if parsing fails or insufficient data
-    internal init?(_ bytes: inout Data) {
+    public init?(_ bytes: inout Data) {
         guard
             let dnsLength = bytes.popUInt16(),
             let dns = bytes.popFirst(Int(dnsLength)),
@@ -907,23 +1069,24 @@ extension ODoH.MessagePlaintext: ODoHCodable {
         else { return nil }
 
         self.dnsMessage = dns
-        self.padding = Array(padding)
+        self.paddingLength = Int(paddingLength)
     }
 
     /// Serialize plaintext message to wire format bytes.
     ///
     /// - Returns: The encoded message ready for encryption
-    internal func encode() -> Data {
+    public func encode() -> Data {
         var data = Data()
+        data.reserveCapacity(4 + self.dnsMessage.count + self.paddingLength)
         data.append(bigEndianBytes: UInt16(self.dnsMessage.count))  // 2 bytes: DNS length
         data.append(self.dnsMessage)  // Variable: DNS data
-        data.append(bigEndianBytes: UInt16(self.padding.count))  // 2 bytes: padding length
-        data.append(contentsOf: self.padding)  // Variable: padding
+        data.append(bigEndianBytes: UInt16(self.paddingLength))  // 2 bytes: padding length
+        data.append(contentsOf: .init(repeating: 0, count: self.paddingLength))
         return data
     }
 }
 
-extension ODoH.Message: ODoHCodable {
+extension ODoH.Message: ODoH.Codable {
     /// Deserialize ODoH message from wire format bytes.
     ///
     /// **Wire Format:**
@@ -938,14 +1101,13 @@ extension ODoH.Message: ODoHCodable {
     public init?(_ bytes: inout Data) {
         guard
             let typeRaw = bytes.popUInt8(),
-            let type = MessageType(rawValue: typeRaw),
             let keyIDLength = bytes.popUInt16(),
             let keyID = bytes.popFirst(Int(keyIDLength)),
             let encryptedLength = bytes.popUInt16(),
             let encrypted = bytes.popFirst(Int(encryptedLength))
         else { return nil }
 
-        self.messageType = type
+        self.messageType = MessageType(rawValue: typeRaw)
         self.keyID = keyID
         self.encryptedMessage = encrypted
     }
@@ -955,6 +1117,7 @@ extension ODoH.Message: ODoHCodable {
     /// - Returns: The encoded message ready for network transmission
     public func encode() -> Data {
         var data = Data()
+        data.reserveCapacity(5 + self.keyID.count + self.encryptedMessage.count)
         data.append(self.messageType.rawValue)  // 1 byte: message type
         data.append(bigEndianBytes: UInt16(self.keyID.count))  // 2 bytes: key ID length
         data.append(self.keyID)  // Variable: key ID/nonce
@@ -964,16 +1127,120 @@ extension ODoH.Message: ODoHCodable {
     }
 }
 
+// - MARK: Helper functions
+
+extension RandomAccessCollection where Element == UInt8, Self == Self.SubSequence {
+    mutating func popUInt8() -> UInt8? {
+        self.popFirst()
+    }
+
+    mutating func popUInt16() -> UInt16? {
+        guard self.count >= 2 else { return nil }
+        return (UInt16(self.popUInt8()!) << 8 | UInt16(self.popUInt8()!))
+    }
+
+    mutating func popFirst(_ n: Int) -> Self? {
+        guard self.count >= n else {
+            return nil
+        }
+
+        let rvalue = self.prefix(n)
+        self = self.dropFirst(n)
+        return rvalue
+    }
+}
+
+extension Data {
+    mutating func append(bigEndianBytes: UInt16) {
+        self.append(UInt8(truncatingIfNeeded: bigEndianBytes >> 8))
+        self.append(UInt8(truncatingIfNeeded: bigEndianBytes))
+    }
+}
+
+extension UInt16 {
+    init(networkIdentifier: HPKE.KEM) {
+        switch networkIdentifier {
+        case .P256_HKDF_SHA256:
+            self = 0x0010
+        case .P384_HKDF_SHA384:
+            self = 0x0011
+        case .P521_HKDF_SHA512:
+            self = 0x0012
+        case .Curve25519_HKDF_SHA256:
+            self = 0x0020
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported KEM")
+        #endif
+        }
+    }
+
+    init(networkIdentifier: HPKE.KDF) {
+        switch networkIdentifier {
+        case .HKDF_SHA256:
+            self = 0x0001
+        case .HKDF_SHA384:
+            self = 0x0002
+        case .HKDF_SHA512:
+            self = 0x0003
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported KDF")
+        #endif
+        }
+    }
+
+    init(networkIdentifier: HPKE.AEAD) {
+        switch networkIdentifier {
+        case .AES_GCM_128:
+            self = 0x0001
+        case .AES_GCM_256:
+            self = 0x0002
+        case .chaChaPoly:
+            self = 0x0003
+        case .exportOnly:
+            self = 0xFFFF
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported AEAD")
+        #endif
+        }
+    }
+}
+
 extension HPKE.KEM {
-    /// Create a public key instance from raw bytes for the specified KEM algorithm.
-    ///
-    /// This method handles the different public key formats used by various elliptic curves:
-    /// - **P-256, P-384, P-521**: Uncompressed point format (0x04 prefix + coordinates)
-    /// - **X25519**: Raw coordinate bytes (32 bytes)
-    ///
-    /// - Parameter data: The raw public key bytes in the appropriate format for this KEM
-    /// - Returns: A public key instance implementing `HPKEDiffieHellmanPublicKey`
-    /// - Throws: `CryptoKitError` if the key data is invalid for the chosen curve
+    init?(networkIdentifier: UInt16) {
+        switch networkIdentifier {
+        case 0x0010:
+            self = .P256_HKDF_SHA256
+        case 0x0011:
+            self = .P384_HKDF_SHA384
+        case 0x0012:
+            self = .P521_HKDF_SHA512
+        case 0x0020:
+            self = .Curve25519_HKDF_SHA256
+        default:
+            return nil
+        }
+    }
+
+    var encapsulatedKeySize: Int {
+        switch self {
+        case .P256_HKDF_SHA256:
+            return 65
+        case .P384_HKDF_SHA384:
+            return 97
+        case .P521_HKDF_SHA512:
+            return 133
+        case .Curve25519_HKDF_SHA256:
+            return 32
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported KEM")
+        #endif
+        }
+    }
+
     internal func getPublicKey(data: Data) throws -> any HPKEDiffieHellmanPublicKey {
         switch self {
         case .P256_HKDF_SHA256:
@@ -993,14 +1260,19 @@ extension HPKE.KEM {
 }
 
 extension HPKE.KDF {
-    /// Get the hash output length in bytes for this KDF.
-    ///
-    /// These values correspond to the output lengths of the underlying hash functions:
-    /// - **SHA-256**: 32 bytes (256 bits)
-    /// - **SHA-384**: 48 bytes (384 bits)
-    /// - **SHA-512**: 64 bytes (512 bits)
-    ///
-    /// Used for key identifier derivation and other protocol operations requiring hash length.
+    init?(networkIdentifier: UInt16) {
+        switch networkIdentifier {
+        case 0x0001:
+            self = .HKDF_SHA256
+        case 0x0002:
+            self = .HKDF_SHA384
+        case 0x0003:
+            self = .HKDF_SHA512
+        default:
+            return nil
+        }
+    }
+
     var hashByteCount: Int {
         switch self {
         case .HKDF_SHA256:
@@ -1012,5 +1284,219 @@ extension HPKE.KDF {
         @unknown default:
             fatalError("Unsupported KDF")
         }
+    }
+}
+
+extension HPKE.AEAD {
+    init?(networkIdentifier: UInt16) {
+        switch networkIdentifier {
+        case 0x0001:
+            self = .AES_GCM_128
+        case 0x0002:
+            self = .AES_GCM_256
+        case 0x0003:
+            self = .chaChaPoly
+        case 0xFFFF:
+            self = .exportOnly
+        default:
+            return nil
+        }
+    }
+
+    var keyByteCount: Int {
+        switch self {
+        case .AES_GCM_128:
+            return 16
+        case .AES_GCM_256:
+            return 32
+        case .chaChaPoly:
+            return 32
+        case .exportOnly:
+            fatalError("ExportOnly should not return a key size.")
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported AEAD")
+        #endif
+        }
+    }
+
+    var nonceByteCount: Int {
+        switch self {
+        case .AES_GCM_128, .AES_GCM_256, .chaChaPoly:
+            return 12
+        case .exportOnly:
+            fatalError("ExportOnly should not return a nonce size.")
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported AEAD")
+        #endif
+        }
+    }
+
+    var tagByteCount: Int {
+        switch self {
+        case .AES_GCM_128, .AES_GCM_256, .chaChaPoly:
+            return 16
+        case .exportOnly:
+            fatalError("ExportOnly should not return a tag size.")
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported AEAD")
+        #endif
+        }
+    }
+
+    internal func seal<D: DataProtocol, AD: DataProtocol>(
+        _ message: D,
+        authenticating aad: AD,
+        nonce: Data,
+        using key: SymmetricKey
+    ) throws -> Data {
+        switch self {
+        case .chaChaPoly:
+            return try ChaChaPoly.seal(
+                message,
+                using: key,
+                nonce: ChaChaPoly.Nonce(data: nonce),
+                authenticating: aad
+            ).combined.suffix(from: nonce.count)
+        default:
+            return try AES.GCM.seal(
+                message,
+                using: key,
+                nonce: AES.GCM.Nonce(data: nonce),
+                authenticating: aad
+            ).combined!.suffix(from: nonce.count)
+        }
+    }
+
+    internal func open<C: DataProtocol, AD: DataProtocol>(
+        _ ct: C,
+        nonce: Data,
+        authenticating aad: AD,
+        using key: SymmetricKey
+    ) throws -> Data {
+        guard ct.count >= self.tagByteCount else {
+            throw HPKE.Errors.expectedPSK
+        }
+
+        switch self {
+        case .AES_GCM_128, .AES_GCM_256:
+            do {
+                let nonce = try AES.GCM.Nonce(data: nonce)
+                let sealedBox = try AES.GCM.SealedBox(
+                    nonce: nonce,
+                    ciphertext: ct.dropLast(16),
+                    tag: ct.suffix(16)
+                )
+                return try AES.GCM.open(sealedBox, using: key, authenticating: aad)
+            }
+        case .chaChaPoly:
+            do {
+                let nonce = try ChaChaPoly.Nonce(data: nonce)
+                let sealedBox = try ChaChaPoly.SealedBox(
+                    nonce: nonce,
+                    ciphertext: ct.dropLast(16),
+                    tag: ct.suffix(16)
+                )
+                return try ChaChaPoly.open(sealedBox, using: key, authenticating: aad)
+            }
+        case .exportOnly:
+            throw HPKE.Errors.exportOnlyMode
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported AEAD")
+        #endif
+        }
+    }
+}
+
+extension HPKE.KEM {
+    internal var identifier: Data {
+        I2OSP(value: Int(UInt16(networkIdentifier: self)), outputByteCount: 2)
+    }
+}
+
+extension HPKE.KDF {
+    internal var identifier: Data {
+        I2OSP(value: Int(UInt16(networkIdentifier: self)), outputByteCount: 2)
+    }
+}
+
+extension HPKE.AEAD {
+    internal var identifier: Data {
+        I2OSP(value: Int(UInt16(networkIdentifier: self)), outputByteCount: 2)
+    }
+}
+
+extension HPKE.KDF {
+    func extract<S: DataProtocol>(salt: S, ikm: SymmetricKey) -> SymmetricKey {
+        switch self {
+        case .HKDF_SHA256:
+            return SymmetricKey(data: HKDF<SHA256>.extract(inputKeyMaterial: ikm, salt: salt))
+        case .HKDF_SHA384:
+            return SymmetricKey(data: HKDF<SHA384>.extract(inputKeyMaterial: ikm, salt: salt))
+        case .HKDF_SHA512:
+            return SymmetricKey(data: HKDF<SHA512>.extract(inputKeyMaterial: ikm, salt: salt))
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported KDF")
+        #endif
+        }
+    }
+
+    func expand(prk: SymmetricKey, info: Data, outputByteCount: Int) -> SymmetricKey {
+        switch self {
+        case .HKDF_SHA256:
+            return SymmetricKey(
+                data: HKDF<SHA256>.expand(
+                    pseudoRandomKey: prk,
+                    info: info,
+                    outputByteCount: outputByteCount
+                )
+            )
+        case .HKDF_SHA384:
+            return SymmetricKey(
+                data: HKDF<SHA384>.expand(
+                    pseudoRandomKey: prk,
+                    info: info,
+                    outputByteCount: outputByteCount
+                )
+            )
+        case .HKDF_SHA512:
+            return SymmetricKey(
+                data: HKDF<SHA512>.expand(
+                    pseudoRandomKey: prk,
+                    info: info,
+                    outputByteCount: outputByteCount
+                )
+            )
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported KDF")
+        #endif
+        }
+    }
+}
+
+internal func I2OSP(value: Int, outputByteCount: Int) -> Data {
+    precondition(outputByteCount > 0, "Cannot I2OSP with no output length.")
+    precondition(value >= 0, "I2OSP requires a non-null value.")
+
+    let requiredBytes = Int(ceil(log2(Double(max(value, 1) + 1)) / 8))
+    precondition(outputByteCount >= requiredBytes)
+
+    var data = Data(repeating: 0, count: outputByteCount)
+
+    for i in (outputByteCount - requiredBytes)...(outputByteCount - 1) {
+        data[i] = UInt8(truncatingIfNeeded: (value >> (8 * (outputByteCount - 1 - i))))
+    }
+
+    return data
+}
+
+extension Data {
+    init(_ key: SymmetricKey) {
+        self = key.withUnsafeBytes { Data($0) }
     }
 }

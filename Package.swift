@@ -50,6 +50,10 @@ let package = Package(
             name: "ObliviousX",
             targets: ["ObliviousX"]
         ),
+        .library(
+            name: "ObliviousDoH",
+            targets: ["ObliviousDoH"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
@@ -71,6 +75,13 @@ let package = Package(
             ],
             swiftSettings: strictConcurrencySettings
         ),
+        .target(
+            name: "ObliviousDoH",
+            dependencies: [
+                .product(name: "Crypto", package: "swift-crypto")
+            ],
+            swiftSettings: strictConcurrencySettings
+        ),
         .testTarget(
             name: "ObliviousHTTPTests",
             dependencies: [
@@ -85,6 +96,14 @@ let package = Package(
             name: "ObliviousXTests",
             dependencies: [
                 "ObliviousX",
+                .product(name: "Crypto", package: "swift-crypto"),
+            ],
+            swiftSettings: strictConcurrencySettings
+        ),
+        .testTarget(
+            name: "ObliviousDoHTests",
+            dependencies: [
+                "ObliviousDoH",
                 .product(name: "Crypto", package: "swift-crypto"),
             ],
             swiftSettings: strictConcurrencySettings
