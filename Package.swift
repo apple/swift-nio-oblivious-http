@@ -3,7 +3,7 @@
 //
 // This source file is part of the SwiftNIO open source project
 //
-// Copyright (c) 2023 Apple Inc. and the SwiftNIO project authors
+// Copyright (c) 2025 Apple Inc. and the SwiftNIO project authors
 // Licensed under Apache License v2.0
 //
 // See LICENSE.txt for license information
@@ -67,9 +67,16 @@ let package = Package(
         .target(
             name: "ObliviousX",
             dependencies: [
-                .product(name: "Crypto", package: "swift-crypto")
+                .product(name: "Crypto", package: "swift-crypto"),
+                "ObliviousXHelpers",
             ],
             swiftSettings: strictConcurrencySettings
+        ),
+        .target(
+            name: "ObliviousXHelpers",
+            dependencies: [
+                .product(name: "Crypto", package: "swift-crypto")
+            ]
         ),
         .testTarget(
             name: "ObliviousHTTPTests",
