@@ -216,8 +216,10 @@ extension HPKE.KDF {
             return 48
         case .HKDF_SHA512:
             return 64
+        #if canImport(CryptoKit)
         @unknown default:
             fatalError("Unsupported KDF")
+        #endif
         }
     }
 
