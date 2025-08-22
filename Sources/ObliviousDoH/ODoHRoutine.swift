@@ -20,7 +20,6 @@ import FoundationEssentials
 import Foundation
 #endif
 
-
 public enum ODoH: Sendable {
     // - MARK: Protocol Types
 
@@ -62,12 +61,12 @@ public enum ODoH: Sendable {
     /// about configurations that failed to parse, allowing clients to understand
     /// which configurations are supported.
     public struct ConfigurationParsingResult: Sendable {
-        public let validConfigurations: ODoH.Configurations
+        public let validConfigurations: [ODoH.Configuration]
         public let failedConfigurations: [(rawData: Data, error: ObliviousDoHError)]
         public var hasValidConfigurations: Bool { !validConfigurations.isEmpty }
 
         internal init(
-            validConfigurations: ODoH.Configurations,
+            validConfigurations: [ODoH.Configuration],
             failedConfigurations: [(rawData: Data, error: ObliviousDoHError)]
         ) {
             self.validConfigurations = validConfigurations
@@ -80,25 +79,20 @@ public enum ODoH: Sendable {
     /// Provides bidirectional conversion between Swift types and their network representation
     /// as specified in RFC 9230. All ODoH message types implement this protocol to enable
     /// consistent serialization and parsing across the protocol stack.
-    public protocol Codable {
+    public protocol Encodable {
         /// Initialize from wire format bytes, consuming data as it parses
         /// - Parameter bytes: The raw network data to parse (consumed during parsing)
         /// - Returns: `nil` if parsing fails or data is invalid
-        init?(_ bytes: inout Data)
+        init?(decoding bytes: inout Data)
 
         /// Serialize to wire format bytes
         /// - Returns: The encoded data ready for network transmission
         func encode() throws -> Data
     }
 
-    /// Collection of ODoH configurations published by servers.
-    /// Contains multiple configurations in decreasing order of preference.
-    /// Served at /.well-known/odohconfigs for client discovery.
-    public typealias Configurations = [Configuration]
-
     /// Protocol for configuration contents that can vary by version
     /// Guarantees HPKE-required properties that should be stable across versions
-    public protocol ConfigurationContentsProtocol: Sendable, Equatable, Hashable, ODoH.Codable {
+    public protocol ConfigurationContentsProtocol: Sendable, Equatable, Hashable, ODoH.Encodable {
         var kem: HPKE.KEM { get }
         var kdf: HPKE.KDF { get }
         var aead: HPKE.AEAD { get }
@@ -211,7 +205,7 @@ public enum ODoH: Sendable {
             Data(
                 self.kdf.expand(
                     prk: self.kdf.extract(salt: Data(), ikm: .init(data: self.encode())),
-                    info: ODoHKeyIDInfo,
+                    info: Data.ODoHKeyIDInfo,
                     outputByteCount: self.kdf.hashByteCount
                 )
             )
@@ -266,11 +260,11 @@ public enum ODoH: Sendable {
         public struct MessageType: Equatable, Hashable, Sendable {
             public let rawValue: UInt8
 
-            public static func query() -> Self {
+            public static var query: Self {
                 Self(rawValue: 1)
             }
 
-            public static func response() -> Self {
+            public static var response: Self {
                 Self(rawValue: 2)
             }
 
@@ -304,14 +298,14 @@ public enum ODoH: Sendable {
         }
 
         public var isResponse: Bool {
-            self.messageType == .response()
+            self.messageType == .response
         }
     }
 }
 
 // MARK: - ODoH.Codable Implementations
 
-extension ODoH.Configurations: ODoH.Codable {
+extension Array: ODoH.Encodable where Element == ODoH.Configuration {
     /// Deserialize configurations collection from wire format bytes.
     ///
     /// **Wire Format:**
@@ -324,7 +318,7 @@ extension ODoH.Configurations: ODoH.Codable {
     ///
     /// - Parameter bytes: The wire format data to parse
     /// - Returns: `nil` if no configurations could be parsed successfully
-    public init?(_ bytes: inout Data) {
+    public init?(decoding bytes: inout Data) {
         let result = Self.parseWithDetails(&bytes)
         guard result.hasValidConfigurations else {
             return nil
@@ -353,11 +347,11 @@ extension ODoH.Configurations: ODoH.Codable {
         else {
             return ODoH.ConfigurationParsingResult(
                 validConfigurations: [],
-                failedConfigurations: [(fullData, .invalidODoHData())]
+                failedConfigurations: [(fullData, .invalidODoHData)]
             )
         }
 
-        var validConfigs: ODoH.Configurations = []
+        var validConfigs: [ODoH.Configuration] = []
         var failedConfigs: [(rawData: Data, error: ObliviousDoHError)] = []
 
         while !configsData.isEmpty {
@@ -369,7 +363,7 @@ extension ODoH.Configurations: ODoH.Codable {
             case .success(let config):
                 validConfigs.append(config)
             case .failure(let error):
-                if error == ObliviousDoHError.invalidODoHData() {
+                if error == ObliviousDoHError.invalidODoHData {
                     break
                 }
 
@@ -432,7 +426,7 @@ extension ODoH.Configurations: ODoH.Codable {
     }
 }
 
-extension ODoH.Configuration: ODoH.Codable {
+extension ODoH.Configuration: ODoH.Encodable {
     /// Deserialize complete ODoH configuration from wire format bytes.
     ///
     /// **Wire Format:**
@@ -442,7 +436,7 @@ extension ODoH.Configuration: ODoH.Codable {
     ///
     /// - Parameter bytes: The wire format data to parse
     /// - Returns: `nil` if parsing fails or version is unsupported
-    public init?(_ bytes: inout Data) {
+    public init?(decoding bytes: inout Data) {
         switch Self.parseWithDetails(&bytes) {
         case .success(let config):
             self = config
@@ -469,7 +463,7 @@ extension ODoH.Configuration: ODoH.Codable {
             let length = bytes.popUInt16(),
             var contentsBytes = bytes.popFirst(Int(length))  // Pop the entire object
         else {
-            return .failure(.invalidODoHData())
+            return .failure(.invalidODoHData)
         }
 
         // Check version first before trying to parse contents
@@ -484,7 +478,7 @@ extension ODoH.Configuration: ODoH.Codable {
                 return .failure(error)
             }
         default:
-            return .failure(.unsupportedHPKEParameters())
+            return .failure(.unsupportedHPKEParameters)
         }
 
         let config = ODoH.Configuration(contentsBacking: contentsBacking)
@@ -509,7 +503,7 @@ extension ODoH.Configuration: ODoH.Codable {
     }
 }
 
-extension ODoH.ConfigurationContents: ODoH.Codable {
+extension ODoH.ConfigurationContents: ODoH.Encodable {
     /// Deserialize configuration contents from wire format bytes.
     ///
     /// **Wire Format:**
@@ -521,7 +515,7 @@ extension ODoH.ConfigurationContents: ODoH.Codable {
     ///
     /// - Parameter bytes: The wire format data to parse
     /// - Returns: `nil` if parsing fails or unsupported algorithms are encountered
-    public init?(_ bytes: inout Data) {
+    public init?(decoding bytes: inout Data) {
         switch Self.parseWithDetails(&bytes) {
         case .success(let contents):
             self = contents
@@ -555,12 +549,12 @@ extension ODoH.ConfigurationContents: ODoH.Codable {
             let aead = HPKE.AEAD(networkIdentifier: aeadID),
             aead != .exportOnly
         else {
-            return .failure(.unsupportedHPKEParameters())
+            return .failure(.unsupportedHPKEParameters)
         }
 
         // Ensure all bytes were consumed
         guard bytes.isEmpty else {
-            return .failure(.invalidODoHData())
+            return .failure(.invalidODoHData)
         }
 
         // Try to validate the public key by attempting to create a key instance
@@ -589,7 +583,7 @@ extension ODoH.ConfigurationContents: ODoH.Codable {
     }
 }
 
-extension ODoH.MessagePlaintext: ODoH.Codable {
+extension ODoH.MessagePlaintext: ODoH.Encodable {
     /// Deserialize plaintext message from wire format bytes.
     ///
     /// **Wire Format:**
@@ -600,7 +594,7 @@ extension ODoH.MessagePlaintext: ODoH.Codable {
     ///
     /// - Parameter bytes: The wire format data to parse
     /// - Returns: `nil` if parsing fails or insufficient data
-    public init?(_ bytes: inout Data) {
+    public init?(decoding bytes: inout Data) {
         guard
             let dnsLength = bytes.popUInt16(),
             let dns = bytes.popFirst(Int(dnsLength)),
@@ -628,7 +622,7 @@ extension ODoH.MessagePlaintext: ODoH.Codable {
     }
 }
 
-extension ODoH.Message: ODoH.Codable {
+extension ODoH.Message: ODoH.Encodable {
     /// Deserialize ODoH message from wire format bytes.
     ///
     /// **Wire Format:**
@@ -640,7 +634,7 @@ extension ODoH.Message: ODoH.Codable {
     ///
     /// - Parameter bytes: The wire format data to parse
     /// - Returns: `nil` if parsing fails or invalid message type
-    public init?(_ bytes: inout Data) {
+    public init?(decoding bytes: inout Data) {
         guard
             let typeRaw = bytes.popUInt8(),
             let keyIDLength = bytes.popUInt16(),
@@ -669,21 +663,23 @@ extension ODoH.Message: ODoH.Codable {
     }
 }
 
-/// Context strings used in HPKE key derivation for different purposes in ODoH protocol.
-/// These strings provide domain separation to ensure keys derived for different purposes
-/// are cryptographically independent, as required by RFC 9230 Section 6.2.
+extension Data {
+    /// Context strings used in HPKE key derivation for different purposes in ODoH protocol.
+    /// These strings provide domain separation to ensure keys derived for different purposes
+    /// are cryptographically independent, as required by RFC 9230 Section 6.2.
 
-/// Used to derive the key identifier from the target's public key configuration
-private let ODoHKeyIDInfo = Data("odoh key id".utf8)
+    /// Used to derive the key identifier from the target's public key configuration
+    fileprivate static let ODoHKeyIDInfo = Self("odoh key id".utf8)
 
-/// Used as HPKE info parameter when setting up encryption context for DNS queries
-private let ODoHQueryInfo = Data("odoh query".utf8)
+    /// Used as HPKE info parameter when setting up encryption context for DNS queries
+    fileprivate static let ODoHQueryInfo = Self("odoh query".utf8)
 
-/// Used when exporting secrets from HPKE context for response encryption
-private let ODoHResponseInfo = Data("odoh response".utf8)
+    /// Used when exporting secrets from HPKE context for response encryption
+    fileprivate static let ODoHResponseInfo = Self("odoh response".utf8)
 
-/// Used to derive the AEAD key for encrypting/decrypting DNS responses
-private let ODoHKeyInfo = Data("odoh key".utf8)
+    /// Used to derive the AEAD key for encrypting/decrypting DNS responses
+    fileprivate static let ODoHKeyInfo = Self("odoh key".utf8)
 
-/// Used to derive the AEAD nonce for encrypting/decrypting DNS responses
-private let ODoHNonceInfo = Data("odoh nonce".utf8)
+    /// Used to derive the AEAD nonce for encrypting/decrypting DNS responses
+    fileprivate static let ODoHNonceInfo = Self("odoh nonce".utf8)
+}

@@ -28,12 +28,12 @@ public struct ObliviousDoHError: Error, Hashable {
     /// Create an error indicating that the HPKE parameters given were not supported.
     /// - Returns: An Error representing this failure.
     @inline(never)
-    public static func unsupportedHPKEParameters() -> ObliviousDoHError {
+    public static var unsupportedHPKEParameters: Self {
         Self.init(backing: .unsupportedHPKEParameters)
     }
 
     @inline(never)
-    public static func invalidODoHData() -> ObliviousDoHError {
+    public static var invalidODoHData: Self {
         Self.init(backing: .invalidODoHData)
     }
 
