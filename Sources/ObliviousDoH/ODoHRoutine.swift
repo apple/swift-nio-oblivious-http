@@ -83,7 +83,7 @@ public enum ODoH: Sendable {
         /// Initialize from wire format bytes, consuming data as it parses
         /// - Parameter bytes: The raw network data to parse (consumed during parsing)
         /// - Returns: `nil` if parsing fails or data is invalid
-        init?(decoding bytes: inout Data)
+        init(decoding bytes: inout Data) throws
 
         /// Serialize to wire format bytes
         /// - Returns: The encoded data ready for network transmission
@@ -106,9 +106,9 @@ public enum ODoH: Sendable {
         /// This method provides comprehensive error information when configuration contents parsing fails,
         /// allowing callers to understand exactly what went wrong during parsing.
         ///
-        /// - Parameter bytes: The wire format data to parse
+        /// - Parameter bytes: The wire format data to parse.
         /// - Returns: Result containing either valid configuration contents or detailed error information
-        static func parseWithDetails(_ bytes: inout Data) -> Result<Self, ObliviousDoHError>
+        static func decodeWithDetails(decoding bytes: inout Data) -> Result<Self, ObliviousDoHError>
     }
 
     /// Configuration for ODoH operations containing the target resolver's public key and cryptographic parameters.
@@ -117,7 +117,7 @@ public enum ODoH: Sendable {
     /// and contains all necessary parameters to encrypt DNS queries that only the target resolver can decrypt.
     /// Multiple configurations may be provided by servers to support different algorithm suites or key rotation.
     public struct Configuration: Sendable {
-        internal enum ContentsBacking: Equatable, Hashable, Sendable {
+        private enum ContentsBacking: Equatable, Hashable, Sendable {
             case v1(ConfigurationContents)
 
             var version: Int {
@@ -127,12 +127,12 @@ public enum ODoH: Sendable {
                 }
             }
         }
-        internal private(set) var contentsBacking: ContentsBacking
+        private var contentsBacking: ContentsBacking
 
         public var version: Int {
             contentsBacking.version
         }
-        // length prefix (UInt16)
+
         public var contents: any ConfigurationContentsProtocol {
             switch contentsBacking {
             case .v1(let contents):
@@ -143,7 +143,7 @@ public enum ODoH: Sendable {
         /// Creates a new ODoH configuration with the specified contents backing.
         ///
         /// - Parameter contentsBacking: The version-specific contents backing
-        internal init(contentsBacking: ContentsBacking) {
+        private init(contentsBacking: ContentsBacking) {
             self.contentsBacking = contentsBacking
         }
 
@@ -205,7 +205,7 @@ public enum ODoH: Sendable {
             Data(
                 self.kdf.expand(
                     prk: self.kdf.extract(salt: Data(), ikm: .init(data: self.encode())),
-                    info: Data.ODoHKeyIDInfo,
+                    info: Data.oDoHKeyIDInfo,
                     outputByteCount: self.kdf.hashByteCount
                 )
             )
@@ -312,21 +312,23 @@ extension Array: ODoH.Encodable where Element == ODoH.Configuration {
     /// - total_length (2 bytes): Total length of all configurations
     /// - configs (variable): Concatenated Configuration structures
     ///
-    /// This method attempts to parse all configurations and returns successfully
-    /// parsed ones while discarding unsupported configurations. Use `parseWithDetails`
-    /// to get information about failed configurations.
+    /// **Parsing Strategy:**
+    /// This function attempts to parse all configurations and returns successfully
+    /// parsed ones while discarding unsupported configurations.
+    /// It prioritizes partial success, returning valid configurations even if some fail.
+    /// Use `decodeWithDetails` to get information about failed configurations.
     ///
     /// - Parameter bytes: The wire format data to parse
     /// - Returns: `nil` if no configurations could be parsed successfully
-    public init?(decoding bytes: inout Data) {
-        let result = Self.parseWithDetails(&bytes)
+    public init(decoding bytes: inout Data) throws {
+        let result = Self.decodeWithDetails(decoding: &bytes)
         guard result.hasValidConfigurations else {
-            return nil
+            throw ObliviousDoHError.invalidODoHData
         }
         self = result.validConfigurations
     }
 
-    /// Parse configurations with detailed error information for failed configurations.
+    /// Decode configurations with detailed error information for failed configurations.
     ///
     /// This method provides comprehensive information about both successful and failed
     /// configuration parsing attempts, allowing clients to understand which configurations
@@ -338,7 +340,7 @@ extension Array: ODoH.Encodable where Element == ODoH.Configuration {
     ///
     /// - Parameter bytes: The wire format data to parse
     /// - Returns: Complete parsing result with valid configurations and error details
-    public static func parseWithDetails(_ data: inout Data) -> ODoH.ConfigurationParsingResult {
+    public static func decodeWithDetails(decoding data: inout Data) -> ODoH.ConfigurationParsingResult {
         // Pop the entire structure from memory. To see if there was any errors structure of the Data first.
         let fullData = data
         guard
@@ -358,7 +360,7 @@ extension Array: ODoH.Encodable where Element == ODoH.Configuration {
             let beforeByteCount = configsData.count
             let originalData = configsData
 
-            let parseResult = ODoH.Configuration.parseWithDetails(&configsData)
+            let parseResult = ODoH.Configuration.decodeWithDetails(decoding: &configsData)
             switch parseResult {
             case .success(let config):
                 validConfigs.append(config)
@@ -436,27 +438,25 @@ extension ODoH.Configuration: ODoH.Encodable {
     ///
     /// - Parameter bytes: The wire format data to parse
     /// - Returns: `nil` if parsing fails or version is unsupported
-    public init?(decoding bytes: inout Data) {
-        switch Self.parseWithDetails(&bytes) {
+    public init(decoding bytes: inout Data) throws {
+        switch Self.decodeWithDetails(decoding: &bytes) {
         case .success(let config):
             self = config
-        case .failure:
-            return nil
+        case .failure(let error):
+            throw error
         }
     }
 
-    /// Parse configuration with detailed error information.
+    /// Decode configuration with detailed error information.
     ///
     /// This method provides comprehensive error information when configuration parsing fails,
     /// allowing callers to understand exactly what went wrong during parsing.
     ///
-    /// - Parameter bytes: The wire format data to parse
+    /// - Parameter bytes: The wire format data to decode
     /// - Returns: Result containing either a valid configuration or detailed error information
-    public static func parseWithDetails(
-        _ bytes: inout Data
-    ) -> Result<
-        ODoH.Configuration, ObliviousDoHError
-    > {
+    public static func decodeWithDetails(
+        decoding bytes: inout Data
+    ) -> Result<ODoH.Configuration, ObliviousDoHError> {
         // Pop the entire structure from memory. To see if there was any errors structure of the Data first.
         guard
             let version = bytes.popUInt16(),
@@ -470,7 +470,7 @@ extension ODoH.Configuration: ODoH.Encodable {
         let contentsBacking: ODoH.Configuration.ContentsBacking
         switch Int(version) {
         case 0x0001:
-            let contentsResult = ODoH.ConfigurationContents.parseWithDetails(&contentsBytes)
+            let contentsResult = ODoH.ConfigurationContents.decodeWithDetails(decoding: &contentsBytes)
             switch contentsResult {
             case .success(let contents):
                 contentsBacking = .v1(contents)
@@ -515,27 +515,25 @@ extension ODoH.ConfigurationContents: ODoH.Encodable {
     ///
     /// - Parameter bytes: The wire format data to parse
     /// - Returns: `nil` if parsing fails or unsupported algorithms are encountered
-    public init?(decoding bytes: inout Data) {
-        switch Self.parseWithDetails(&bytes) {
+    public init(decoding bytes: inout Data) throws {
+        switch Self.decodeWithDetails(decoding: &bytes) {
         case .success(let contents):
             self = contents
-        case .failure:
-            return nil
+        case .failure(let error):
+            throw error
         }
     }
 
-    /// Parse configuration contents with detailed error information.
+    /// Decode configuration contents with detailed error information.
     ///
     /// This method provides comprehensive error information when configuration contents parsing fails,
     /// allowing callers to understand exactly what went wrong during parsing.
     ///
     /// - Parameter bytes: The wire format data to parse
     /// - Returns: Result containing either valid configuration contents or detailed error information
-    public static func parseWithDetails(
-        _ bytes: inout Data
-    ) -> Result<
-        ODoH.ConfigurationContents, ObliviousDoHError
-    > {
+    public static func decodeWithDetails(
+        decoding bytes: inout Data
+    ) -> Result<ODoH.ConfigurationContents, ObliviousDoHError> {
         // As we have already popped the entirety of the configuration
         // contents we don't have to fail with .invalidODoHData.
         guard
@@ -594,7 +592,7 @@ extension ODoH.MessagePlaintext: ODoH.Encodable {
     ///
     /// - Parameter bytes: The wire format data to parse
     /// - Returns: `nil` if parsing fails or insufficient data
-    public init?(decoding bytes: inout Data) {
+    public init(decoding bytes: inout Data) throws {
         guard
             let dnsLength = bytes.popUInt16(),
             let dns = bytes.popFirst(Int(dnsLength)),
@@ -602,7 +600,9 @@ extension ODoH.MessagePlaintext: ODoH.Encodable {
             let padding = bytes.popFirst(Int(paddingLength)),
             // Clients MUST validate R_plain.padding (as all zeros) before using R_plain.dns_message.
             padding.allSatisfy({ $0 == 0 })
-        else { return nil }
+        else {
+            throw ObliviousDoHError.invalidODoHData
+        }
 
         self.dnsMessage = dns
         self.paddingLength = Int(paddingLength)
@@ -617,7 +617,7 @@ extension ODoH.MessagePlaintext: ODoH.Encodable {
         data.append(bigEndianBytes: UInt16(self.dnsMessage.count))  // 2 bytes: DNS length
         data.append(self.dnsMessage)  // Variable: DNS data
         data.append(bigEndianBytes: UInt16(self.paddingLength))  // 2 bytes: padding length
-        data.append(contentsOf: .init(repeating: 0, count: self.paddingLength))
+        data.append(contentsOf: repeatElement(0, count: self.paddingLength))
         return data
     }
 }
@@ -634,14 +634,16 @@ extension ODoH.Message: ODoH.Encodable {
     ///
     /// - Parameter bytes: The wire format data to parse
     /// - Returns: `nil` if parsing fails or invalid message type
-    public init?(decoding bytes: inout Data) {
+    public init(decoding bytes: inout Data) throws {
         guard
             let typeRaw = bytes.popUInt8(),
             let keyIDLength = bytes.popUInt16(),
             let keyID = bytes.popFirst(Int(keyIDLength)),
             let encryptedLength = bytes.popUInt16(),
             let encrypted = bytes.popFirst(Int(encryptedLength))
-        else { return nil }
+        else {
+            throw ObliviousDoHError.invalidODoHData
+        }
 
         self.messageType = MessageType(rawValue: typeRaw)
         self.keyID = keyID
@@ -669,17 +671,17 @@ extension Data {
     /// are cryptographically independent, as required by RFC 9230 Section 6.2.
 
     /// Used to derive the key identifier from the target's public key configuration
-    fileprivate static let ODoHKeyIDInfo = Self("odoh key id".utf8)
+    fileprivate static let oDoHKeyIDInfo = Self("odoh key id".utf8)
 
     /// Used as HPKE info parameter when setting up encryption context for DNS queries
-    fileprivate static let ODoHQueryInfo = Self("odoh query".utf8)
+    fileprivate static let oDoHQueryInfo = Self("odoh query".utf8)
 
     /// Used when exporting secrets from HPKE context for response encryption
-    fileprivate static let ODoHResponseInfo = Self("odoh response".utf8)
+    fileprivate static let oDoHResponseInfo = Self("odoh response".utf8)
 
     /// Used to derive the AEAD key for encrypting/decrypting DNS responses
-    fileprivate static let ODoHKeyInfo = Self("odoh key".utf8)
+    fileprivate static let oDoHKeyInfo = Self("odoh key".utf8)
 
     /// Used to derive the AEAD nonce for encrypting/decrypting DNS responses
-    fileprivate static let ODoHNonceInfo = Self("odoh nonce".utf8)
+    fileprivate static let oDoHNonceInfo = Self("odoh nonce".utf8)
 }

@@ -20,16 +20,15 @@ import XCTest
 final class ObliviousDoHTests: XCTestCase {
     func testConfigurationsParsing() throws {
         // Configuration grabbed from odoh.cloudflare-dns.com/.well-known/odohconfigs
-        let configurationsBytes: [UInt8] = [
+        var configurationsData = Data([
             0x00, 0x2C, 0x00, 0x01, 0x00, 0x28, 0x00, 0x20, 0x00, 0x01,
             0x00, 0x01, 0x00, 0x20, 0x8B, 0x70, 0xFE, 0xDD, 0x79, 0xBA,
             0x68, 0x55, 0xDB, 0x1D, 0x01, 0x25, 0xBF, 0x2D, 0xEA, 0xC0,
             0xE6, 0x88, 0x3B, 0x4F, 0xC0, 0x41, 0xD0, 0xB6, 0xA3, 0x34,
             0x71, 0x36, 0x33, 0xCF, 0x36, 0x4C,
-        ]
-        var configurationsData = Data(configurationsBytes)
+        ])
 
-        let configurations = ODoH.Configurations.parseWithDetails(&configurationsData)
+        let configurations = [ODoH.Configuration].decodeWithDetails(decoding: &configurationsData)
         XCTAssert(configurations.hasValidConfigurations)
         XCTAssert(configurations.failedConfigurations.isEmpty)
     }
@@ -37,7 +36,7 @@ final class ObliviousDoHTests: XCTestCase {
     func testConfigurationParsingWithMalformedData() throws {
         // Test truncated data
         var truncatedData = Data([0x00, 0x10])  // Claims 16 bytes but only has 2
-        let result = ODoH.Configurations.parseWithDetails(&truncatedData)
+        let result = [ODoH.Configuration].decodeWithDetails(decoding: &truncatedData)
         XCTAssertFalse(result.hasValidConfigurations)
         XCTAssertEqual(result.failedConfigurations.count, 1)
     }
@@ -45,7 +44,7 @@ final class ObliviousDoHTests: XCTestCase {
     func testConfigurationParsingWithUnsupportedVersion() throws {
         // Create config with version 0x0002 (unsupported)
         var data = Data([0x00, 0x08, 0x00, 0x02, 0x00, 0x04, 0x01, 0x02, 0x03, 0x04])
-        let result = ODoH.Configurations.parseWithDetails(&data)
+        let result = [ODoH.Configuration].decodeWithDetails(decoding: &data)
         XCTAssertFalse(result.hasValidConfigurations)
         XCTAssertEqual(result.failedConfigurations.count, 1)
     }
@@ -57,8 +56,8 @@ final class ObliviousDoHTests: XCTestCase {
             0x01, 0x02, 0x03, 0x04,  // valid key data
             0xFF, 0xFF,  // extra bytes that should cause failure
         ])
-        let result = ODoH.ConfigurationContents.parseWithDetails(&data)
-        XCTAssertEqual(result, .failure(.invalidODoHData()))
+        let result = ODoH.ConfigurationContents.decodeWithDetails(decoding: &data)
+        XCTAssertEqual(result, .failure(.invalidODoHData))
     }
 
     func testConfigurationWithInvalidPublicKey() throws {
@@ -67,7 +66,7 @@ final class ObliviousDoHTests: XCTestCase {
             0x00, 0x20, 0x00, 0x01, 0x00, 0x01, 0x00, 0x04,
             0x01, 0x02, 0x03, 0x04,  // Invalid 4-byte key (should be 32 bytes for Curve25519)
         ])
-        let result = ODoH.ConfigurationContents.parseWithDetails(&data)
+        let result = ODoH.ConfigurationContents.decodeWithDetails(decoding: &data)
         if case .failure(let error) = result {
             // Check that it's an invalidPublicKey error
             if case .invalidPublicKey(kemID: 0x0020, key: Data([0x01, 0x02, 0x03, 0x04])) = error {
@@ -87,9 +86,12 @@ final class ObliviousDoHTests: XCTestCase {
             0x00, 0x04,  // encrypted message length
             0x01, 0x02, 0x03, 0x04,  // encrypted message
         ])
-        let message = ODoH.Message(&data)
-        XCTAssertNotNil(message)
-        XCTAssertEqual(message?.keyID, Data())
+        guard let message = try? ODoH.Message(decoding: &data) else {
+            XCTFail()
+            return
+        }
+
+        XCTAssertEqual(message.keyID, Data())
     }
 
     func testMessagePlaintextWithInvalidPadding() throws {
@@ -101,7 +103,7 @@ final class ObliviousDoHTests: XCTestCase {
             0x00, 0xFF, 0x00,  // Padding with non-zero byte (should fail)
         ])
 
-        let result = ODoH.MessagePlaintext(&data)
+        let result = try? ODoH.MessagePlaintext(decoding: &data)
         XCTAssertNil(result)  // Should fail due to invalid padding
     }
 
@@ -113,7 +115,7 @@ final class ObliviousDoHTests: XCTestCase {
             0x00, 0x00, 0x00,  // Valid zero padding
         ])
 
-        let result = ODoH.MessagePlaintext(&data)
+        let result = try? ODoH.MessagePlaintext(decoding: &data)
         XCTAssertNotNil(result)
         XCTAssertEqual(result?.paddingLength, 3)
     }
