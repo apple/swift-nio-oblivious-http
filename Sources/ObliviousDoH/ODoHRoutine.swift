@@ -306,11 +306,15 @@ public enum ODoH: Sendable {
 // MARK: - ODoH.Codable Implementations
 
 extension Array: ODoH.Encodable where Element == ODoH.Configuration {
-    /// Deserialize configurations collection from wire format bytes.
+    /// Decode configurations collection from wire format bytes.
     ///
     /// **Wire Format:**
     /// - total_length (2 bytes): Total length of all configurations
     /// - configs (variable): Concatenated Configuration structures
+    ///
+    /// **Data Requirements:**
+    /// This method expects `data` to contain at least `total_length + 2` bytes, where the first 2 bytes
+    /// specify the total length of all configurations that follow.
     ///
     /// **Parsing Strategy:**
     /// This function attempts to parse all configurations and returns successfully
@@ -318,8 +322,8 @@ extension Array: ODoH.Encodable where Element == ODoH.Configuration {
     /// It prioritizes partial success, returning valid configurations even if some fail.
     /// Use `decodeWithDetails` to get information about failed configurations.
     ///
-    /// - Parameter bytes: The wire format data to parse
-    /// - Returns: `nil` if no configurations could be parsed successfully
+    /// - Parameter decoding: The wire format data to parse
+    /// - Throws: `ObliviousDoHError.invalidODoHData` if no configurations could be parsed successfully
     public init(decoding bytes: inout Data) throws {
         let result = Self.decodeWithDetails(decoding: &bytes)
         guard result.hasValidConfigurations else {
@@ -338,14 +342,18 @@ extension Array: ODoH.Encodable where Element == ODoH.Configuration {
     /// - total_length (2 bytes): Total length of all configurations
     /// - configs (variable): Concatenated Configuration structures
     ///
-    /// - Parameter bytes: The wire format data to parse
+    /// **Data Requirements:**
+    /// This method expects `data` to contain at least `total_length + 2` bytes, where the first 2 bytes
+    /// specify the total length of all configurations that follow.
+    ///
+    /// - Parameter decoding: The wire format data to parse
     /// - Returns: Complete parsing result with valid configurations and error details
-    public static func decodeWithDetails(decoding data: inout Data) -> ODoH.ConfigurationParsingResult {
+    public static func decodeWithDetails(decoding bytes: inout Data) -> ODoH.ConfigurationParsingResult {
         // Pop the entire structure from memory. To see if there was any errors structure of the Data first.
-        let fullData = data
+        let fullData = bytes
         guard
-            let totalLength = data.popUInt16(),
-            var configsData = data.popFirst(Int(totalLength))
+            let totalLength = bytes.popUInt16(),
+            var configsData = bytes.popFirst(Int(totalLength))
         else {
             return ODoH.ConfigurationParsingResult(
                 validConfigurations: [],
@@ -381,7 +389,7 @@ extension Array: ODoH.Encodable where Element == ODoH.Configuration {
         )
     }
 
-    /// Serialize configurations collection to wire format bytes.
+    /// Encode configurations collection to wire format bytes.
     ///
     /// - Returns: The encoded configurations ready for network transmission
     public func encode() throws -> Data {
@@ -429,15 +437,15 @@ extension Array: ODoH.Encodable where Element == ODoH.Configuration {
 }
 
 extension ODoH.Configuration: ODoH.Encodable {
-    /// Deserialize complete ODoH configuration from wire format bytes.
+    /// Decode complete ODoH configuration from wire format bytes.
     ///
     /// **Wire Format:**
     /// - version (2 bytes): Protocol version (0x0001 for RFC 9230)
     /// - length (2 bytes): Length of contents field
     /// - contents (variable): The configuration contents
     ///
-    /// - Parameter bytes: The wire format data to parse
-    /// - Returns: `nil` if parsing fails or version is unsupported
+    /// - Parameter decoding: The wire format data to parse
+    /// - Throws: `ObliviousDoHError` if parsing fails or insufficient data
     public init(decoding bytes: inout Data) throws {
         switch Self.decodeWithDetails(decoding: &bytes) {
         case .success(let config):
@@ -452,7 +460,7 @@ extension ODoH.Configuration: ODoH.Encodable {
     /// This method provides comprehensive error information when configuration parsing fails,
     /// allowing callers to understand exactly what went wrong during parsing.
     ///
-    /// - Parameter bytes: The wire format data to decode
+    /// - Parameter decoding: The wire format data to decode
     /// - Returns: Result containing either a valid configuration or detailed error information
     public static func decodeWithDetails(
         decoding bytes: inout Data
@@ -485,7 +493,7 @@ extension ODoH.Configuration: ODoH.Encodable {
         return .success(config)
     }
 
-    /// Serialize complete configuration to wire format bytes.
+    /// Encode complete configuration to wire format bytes.
     ///
     /// - Returns: The encoded configuration ready for network transmission
     public func encode() throws -> Data {
@@ -504,7 +512,7 @@ extension ODoH.Configuration: ODoH.Encodable {
 }
 
 extension ODoH.ConfigurationContents: ODoH.Encodable {
-    /// Deserialize configuration contents from wire format bytes.
+    /// Decode configuration contents from wire format bytes.
     ///
     /// **Wire Format:**
     /// - kem_id (2 bytes): Key Encapsulation Mechanism identifier
@@ -513,8 +521,8 @@ extension ODoH.ConfigurationContents: ODoH.Encodable {
     /// - public_key_length (2 bytes): Length of public key
     /// - public_key (variable): The public key bytes
     ///
-    /// - Parameter bytes: The wire format data to parse
-    /// - Returns: `nil` if parsing fails or unsupported algorithms are encountered
+    /// - Parameter decoding: The wire format data to parse
+    /// - Throws: `ObliviousDoHError` if parsing fails or unsupported algorithms are encountered
     public init(decoding bytes: inout Data) throws {
         switch Self.decodeWithDetails(decoding: &bytes) {
         case .success(let contents):
@@ -529,7 +537,7 @@ extension ODoH.ConfigurationContents: ODoH.Encodable {
     /// This method provides comprehensive error information when configuration contents parsing fails,
     /// allowing callers to understand exactly what went wrong during parsing.
     ///
-    /// - Parameter bytes: The wire format data to parse
+    /// - Parameter decoding: The wire format data to parse
     /// - Returns: Result containing either valid configuration contents or detailed error information
     public static func decodeWithDetails(
         decoding bytes: inout Data
@@ -566,7 +574,7 @@ extension ODoH.ConfigurationContents: ODoH.Encodable {
         return .success(contents)
     }
 
-    /// Serialize configuration contents to wire format bytes.
+    /// Encode configuration contents to wire format bytes.
     ///
     /// - Returns: The encoded configuration contents ready for network transmission
     public func encode() -> Data {
@@ -582,7 +590,7 @@ extension ODoH.ConfigurationContents: ODoH.Encodable {
 }
 
 extension ODoH.MessagePlaintext: ODoH.Encodable {
-    /// Deserialize plaintext message from wire format bytes.
+    /// Decode plaintext message from wire format bytes.
     ///
     /// **Wire Format:**
     /// - dns_message_length (2 bytes): Length of DNS message
@@ -590,8 +598,8 @@ extension ODoH.MessagePlaintext: ODoH.Encodable {
     /// - padding_length (2 bytes): Length of padding
     /// - padding (variable): Zero-filled padding bytes
     ///
-    /// - Parameter bytes: The wire format data to parse
-    /// - Returns: `nil` if parsing fails or insufficient data
+    /// - Parameter decoding: The wire format data to parse
+    /// - Throws: `ObliviousDoHError.invalidODoHData` if parsing fails or insufficient data
     public init(decoding bytes: inout Data) throws {
         guard
             let dnsLength = bytes.popUInt16(),
@@ -608,7 +616,7 @@ extension ODoH.MessagePlaintext: ODoH.Encodable {
         self.paddingLength = Int(paddingLength)
     }
 
-    /// Serialize plaintext message to wire format bytes.
+    /// Encode plaintext message to wire format bytes.
     ///
     /// - Returns: The encoded message ready for encryption
     public func encode() -> Data {
@@ -623,7 +631,7 @@ extension ODoH.MessagePlaintext: ODoH.Encodable {
 }
 
 extension ODoH.Message: ODoH.Encodable {
-    /// Deserialize ODoH message from wire format bytes.
+    /// Decode ODoH message from wire format bytes.
     ///
     /// **Wire Format:**
     /// - message_type (1 byte): 0x01 for query, 0x02 for response
@@ -632,8 +640,8 @@ extension ODoH.Message: ODoH.Encodable {
     /// - encrypted_message_length (2 bytes): Length of encrypted content
     /// - encrypted_message (variable): The encrypted payload
     ///
-    /// - Parameter bytes: The wire format data to parse
-    /// - Returns: `nil` if parsing fails or invalid message type
+    /// - Parameter decoding: The wire format data to parse
+    /// - Throws: `ObliviousDoHError.invalidODoHData` if parsing fails or insufficient data
     public init(decoding bytes: inout Data) throws {
         guard
             let typeRaw = bytes.popUInt8(),
@@ -650,7 +658,7 @@ extension ODoH.Message: ODoH.Encodable {
         self.encryptedMessage = encrypted
     }
 
-    /// Serialize ODoH message to wire format bytes.
+    /// Encode ODoH message to wire format bytes.
     ///
     /// - Returns: The encoded message ready for network transmission
     public func encode() -> Data {
