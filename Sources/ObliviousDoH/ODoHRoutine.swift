@@ -82,7 +82,7 @@ public enum ODoH: Sendable {
     public protocol Encodable {
         /// Initialize from wire format bytes, consuming data as it parses
         /// - Parameter bytes: The raw network data to parse (consumed during parsing)
-        /// - Returns: `nil` if parsing fails or data is invalid
+        /// - Throws: An error if parsing fails or data is invalid
         init(decoding bytes: inout Data) throws
 
         /// Serialize to wire format bytes
@@ -129,10 +129,14 @@ public enum ODoH: Sendable {
         }
         private var contentsBacking: ContentsBacking
 
+        /// The version number of this ODoH configuration.
+        /// This indicates which version of the ODoH protocol specification this configuration conforms to.
         public var version: Int {
             contentsBacking.version
         }
 
+        /// The configuration contents containing cryptographic parameters and settings.
+        /// This provides access to the specific configuration data based on the protocol version.
         public var contents: any ConfigurationContentsProtocol {
             switch contentsBacking {
             case .v1(let contents):

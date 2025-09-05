@@ -32,11 +32,18 @@ public struct ObliviousDoHError: Error, Hashable {
         Self.init(backing: .unsupportedHPKEParameters)
     }
 
+    /// Create an error indicating that the ODoH data is malformed or invalid.
+    /// - Returns: An Error representing this failure.
     @inline(never)
     public static var invalidODoHData: Self {
         Self.init(backing: .invalidODoHData)
     }
 
+    /// Create an error indicating that the message type does not match expectations.
+    /// - Parameters:
+    ///   - expected: The expected message type
+    ///   - actual: The actual message type received
+    /// - Returns: An Error representing this type mismatch.
     @inline(never)
     public static func invalidMessageType(
         expected: ODoH.Message.MessageType,
@@ -45,16 +52,27 @@ public struct ObliviousDoHError: Error, Hashable {
         Self.init(backing: .invalidMessageType(expected.rawValue, actual.rawValue))
     }
 
+    /// Create an error indicating that the public key is invalid for the given KEM ID.
+    /// - Parameters:
+    ///   - kemID: The Key Encapsulation Mechanism identifier
+    ///   - key: The invalid public key data
+    /// - Returns: An Error representing this key validation failure.
     @inline(never)
     public static func invalidPublicKey(kemID: UInt16, key: Data) -> ObliviousDoHError {
         Self.init(backing: .invalidPublicKey(kemID, key))
     }
 
+    /// Create an error indicating that the ODoH message has an invalid length.
+    /// - Parameter length: The invalid length value
+    /// - Returns: An Error representing this length validation failure.
     @inline(never)
     public static func invalidODoHLength(length: Int) -> ObliviousDoHError {
         Self.init(backing: .invalidODoHLength(length))
     }
 
+    /// Create an error indicating that the ODoH version is not supported.
+    /// - Parameter version: The unsupported version number
+    /// - Returns: An Error representing this version compatibility failure.
     @inline(never)
     public static func invalidODoHVersion(version: Int) -> ObliviousDoHError {
         Self.init(backing: .invalidODoHVersion(version))
