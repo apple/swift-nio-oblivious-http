@@ -79,6 +79,25 @@ public struct ObliviousDoHError: Error, Hashable {
     }
 }
 
+extension ObliviousDoHError: CustomStringConvertible {
+    public var description: String {
+        switch self.backing {
+        case .unsupportedHPKEParameters:
+            return "Unsupported HPKE parameters"
+        case .invalidODoHData:
+            return "Invalid ODoH data format"
+        case .invalidMessageType(let expected, let actual):
+            return "Invalid message type: expected \(expected), got \(actual)"
+        case .invalidPublicKey(let kemID, let key):
+            return "Invalid public key for KEM ID \(kemID): \(key.count) bytes"
+        case .invalidODoHLength(let length):
+            return "Invalid ODoH message length: \(length)"
+        case .invalidODoHVersion(let version):
+            return "Unsupported ODoH version: \(version)"
+        }
+    }
+}
+
 extension ObliviousDoHError {
     enum Backing: Hashable, Sendable {
         case unsupportedHPKEParameters
