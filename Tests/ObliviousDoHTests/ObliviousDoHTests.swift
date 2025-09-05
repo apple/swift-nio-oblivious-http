@@ -69,10 +69,9 @@ final class ObliviousDoHTests: XCTestCase {
         let result = ODoH.ConfigurationContents.decodeWithDetails(decoding: &data)
         if case .failure(let error) = result {
             // Check that it's an invalidPublicKey error
-            if case .invalidPublicKey(kemID: 0x0020, key: Data([0x01, 0x02, 0x03, 0x04])) = error {
-                XCTAssert(true)
-            } else {
+            guard case .invalidPublicKey(kemID: 0x0020, key: Data([0x01, 0x02, 0x03, 0x04])) = error else {
                 XCTFail("Expected invalidPublicKey error, got: \(error)")
+                return
             }
         } else {
             XCTFail("Expected failure")
