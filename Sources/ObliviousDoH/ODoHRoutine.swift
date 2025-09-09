@@ -261,8 +261,8 @@ public enum ODoH: Sendable {
         /// Distinguishes between client queries and server responses in the protocol.
         /// The message type affects how certain fields are interpreted and which
         /// cryptographic operations are applied.
-        public struct MessageType: Equatable, Hashable, Sendable {
-            public let rawValue: UInt8
+        public struct MessageType: Equatable, Hashable, Sendable, RawRepresentable {
+            public var rawValue: UInt8
 
             public static var query: Self {
                 Self(rawValue: 1)
@@ -272,11 +272,7 @@ public enum ODoH: Sendable {
                 Self(rawValue: 2)
             }
 
-            public static func other(_ rawValue: UInt8) -> Self {
-                Self(rawValue: rawValue)
-            }
-
-            init(rawValue: UInt8) {
+            public init(rawValue: UInt8) {
                 self.rawValue = rawValue
             }
         }
