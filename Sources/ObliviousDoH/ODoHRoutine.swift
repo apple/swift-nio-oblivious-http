@@ -101,7 +101,6 @@ public enum ODoH: Sendable {
         /// HKDF as specified in RFC 9230 Section 6.2.
         ///
         /// - Parameter configuration: Target server's ODoH configuration
-        /// - Throws: `CryptoKitError` if public key format is invalid
         public init(configuration: Configuration) throws {
             guard configuration.contents.aead != .exportOnly else {
                 throw ObliviousDoHError.unsupportedHPKEParameters
@@ -224,10 +223,10 @@ public enum ODoH: Sendable {
 
         /// Decrypt DNS response using query encryption result.
         ///
-        /// Convenience method that extracts the context and encrypted query from a QueryEncryptionResult.
+        /// Convenience method that extracts the context from a QueryEncryptionResult.
         ///
         /// - Parameters:
-        ///   - queryResult: Result from encrypting the original query
+        ///   - queryEncryptionResult: Result from encrypting the original query
         ///   - queryPlain: Original query plaintext (used in key derivation)
         ///   - responseData: Encrypted response from server
         /// - Returns: Decrypted DNS response
@@ -245,10 +244,10 @@ public enum ODoH: Sendable {
 
         /// Decrypt DNS response using query encryption result.
         ///
-        /// Convenience method that extracts the context and encrypted query from a QueryEncryptionResult.
+        /// Convenience method that extracts the context from a QueryEncryptionResult.
         ///
         /// - Parameters:
-        ///   - queryResult: Result from encrypting the original query
+        ///   - queryEncryptionResult: Result from encrypting the original query
         ///   - queryPlain: Original query plaintext (used in key derivation)
         ///   - response: Encrypted response from server (in Message format)
         /// - Returns: Decrypted DNS response
@@ -380,7 +379,7 @@ public enum ODoH: Sendable {
         /// Convenience method that uses the context and plaintext from a QueryDecryptionResult.
         ///
         /// - Parameters:
-        ///   - queryResult: Result from decrypting the original query
+        ///   - queryDecryptionResult: Result from decrypting the original query
         ///   - responsePlain: DNS response to encrypt
         /// - Returns: Encrypted response message
         public func encryptResponse(
