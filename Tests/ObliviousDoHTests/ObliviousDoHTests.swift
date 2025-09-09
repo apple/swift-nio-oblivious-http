@@ -118,4 +118,44 @@ final class ObliviousDoHTests: XCTestCase {
         XCTAssertNotNil(result)
         XCTAssertEqual(result?.paddingLength, 3)
     }
+
+    func testObliviousDoHRoundtrip() throws {
+        let request = "Hello world!"
+        let responseText = "Hello from ObliviousX"
+
+        let serverPrivateKey = Curve25519.KeyAgreement.PrivateKey.init()
+        let configuration = try ODoH.Configuration.v1(privateKey: serverPrivateKey)
+
+        let routine = try ODoH.Routine(configuration: configuration)
+
+        let query = ODoH.MessagePlaintext(dnsMessage: Data(request.utf8), paddingLength: 128)
+        let queryEncryptResult = try routine.encryptQuery(
+            queryPlain: query
+        )
+
+        XCTAssertNotEqual(query.encode(), queryEncryptResult.encryptedQuery)
+
+        let queryDecryptResult = try routine.decryptQuery(
+            queryData: queryEncryptResult.encryptedQuery,
+            privateKey: serverPrivateKey
+        )
+
+        XCTAssertEqual(query, queryDecryptResult.plaintextQuery)
+
+        let response = ODoH.MessagePlaintext(dnsMessage: Data(responseText.utf8), paddingLength: 64)
+        let encryptedResponse = try routine.encryptResponse(
+            queryDecryptionResult: queryDecryptResult,
+            responsePlain: response
+        )
+
+        XCTAssertNotEqual(response.encode(), encryptedResponse)
+
+        // 4. Client decrypts response
+        let decryptedResponse = try routine.decryptResponse(
+            queryEncryptionResult: queryEncryptResult,
+            queryPlain: query,
+            responseData: encryptedResponse
+        )
+        XCTAssertEqual(response, decryptedResponse)
+    }
 }
