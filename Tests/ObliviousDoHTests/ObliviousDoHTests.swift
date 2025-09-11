@@ -126,16 +126,17 @@ final class ObliviousDoHTests: XCTestCase {
         let serverPrivateKey = Curve25519.KeyAgreement.PrivateKey.init()
         let configuration = try ODoH.Configuration.v1(privateKey: serverPrivateKey)
 
-        let routine = try ODoH.Routine(configuration: configuration)
+        let clientRoutine = try ODoH.ClientRoutine(configuration: configuration)
+        let serverRoutine = try ODoH.ServerRoutine(configuration: configuration)
 
         let query = ODoH.MessagePlaintext(dnsMessage: Data(request.utf8), paddingLength: 128)
-        let queryEncryptResult = try routine.encryptQuery(
+        let queryEncryptResult = try clientRoutine.encryptQuery(
             queryPlain: query
         )
 
         XCTAssertNotEqual(query.encode(), queryEncryptResult.encryptedQuery)
 
-        let queryDecryptResult = try routine.decryptQuery(
+        let queryDecryptResult = try serverRoutine.decryptQuery(
             queryData: queryEncryptResult.encryptedQuery,
             privateKey: serverPrivateKey
         )
@@ -143,7 +144,7 @@ final class ObliviousDoHTests: XCTestCase {
         XCTAssertEqual(query, queryDecryptResult.plaintextQuery)
 
         let response = ODoH.MessagePlaintext(dnsMessage: Data(responseText.utf8), paddingLength: 64)
-        let encryptedResponse = try routine.encryptResponse(
+        let encryptedResponse = try serverRoutine.encryptResponse(
             queryDecryptionResult: queryDecryptResult,
             responsePlain: response
         )
@@ -151,7 +152,7 @@ final class ObliviousDoHTests: XCTestCase {
         XCTAssertNotEqual(response.encode(), encryptedResponse)
 
         // 4. Client decrypts response
-        let decryptedResponse = try routine.decryptResponse(
+        let decryptedResponse = try clientRoutine.decryptResponse(
             queryEncryptionResult: queryEncryptResult,
             queryPlain: query,
             responseData: encryptedResponse

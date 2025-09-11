@@ -33,8 +33,8 @@ import Foundation
 ///     // Handle error
 /// }
 ///
-/// // 3. Initialize ODoH routine with selected configuration
-/// let clientRoutine = try ODoH.Routine(configuration: selectedConfig)
+/// // 3. Initialize ODoH client routine with selected configuration
+/// let clientRoutine = try ODoH.ClientRoutine(configuration: selectedConfig)
 ///
 /// // 4. Create DNS query with padding for privacy
 /// let dnsQuery: Data = buildDNSQuery(domain: "example.com", type: .A)
@@ -59,7 +59,7 @@ import Foundation
 /// // 1. Server creates and publishes configuration
 /// let serverPrivateKey = Curve25519.KeyAgreement.PrivateKey()
 /// let serverConfig = try ODoH.Configuration.v1(privateKey: serverPrivateKey)
-/// let serverRoutine = try ODoH.Routine(configuration: serverConfig)
+/// let serverRoutine = try ODoH.ServerRoutine(configuration: serverConfig)
 ///
 /// // 2. Publish configuration at well-known endpoint
 /// let configsToPublish: [ODoH.Configuration] = [serverConfig]
@@ -85,14 +85,14 @@ import Foundation
 /// // 6. Send encrypted response back through proxy to client...
 /// ```
 public enum ODoH: Sendable {
-    /// ODoH cryptographic routine for encrypting queries and decrypting responses.
+    /// Shared helpers for ODoH cryptographic routines.
     ///
-    /// Handles the client-side and server-side cryptographic operations for Oblivious DNS over HTTPS.
+    /// Contains common functionality for both client and server ODoH operations.
     /// Initialized with a configuration containing the target's public key and algorithm parameters.
-    public struct Routine {
-        private var ct: HPKE.Ciphersuite
-        private var pkR: any HPKEDiffieHellmanPublicKey
-        private var keyID: Data
+    internal struct RoutineCore {
+        internal var ct: HPKE.Ciphersuite
+        internal var pkR: any HPKEDiffieHellmanPublicKey
+        internal var keyID: Data
 
         /// Initialize ODoH encryption with target server configuration.
         ///
@@ -101,7 +101,7 @@ public enum ODoH: Sendable {
         /// HKDF as specified in RFC 9230 Section 6.2.
         ///
         /// - Parameter configuration: Target server's ODoH configuration
-        public init(configuration: Configuration) throws {
+        internal init(configuration: Configuration) throws {
             guard configuration.contents.aead != .exportOnly else {
                 throw ObliviousDoHError.unsupportedHPKEParameters
             }
@@ -115,6 +115,83 @@ public enum ODoH: Sendable {
             self.keyID = configuration.contents.identifier
         }
 
+        /// Derive AEAD key and nonce for response encryption.
+        ///
+        /// Uses HKDF Extract-and-Expand with query plaintext and response nonce as salt.
+        /// Formula: Extract(Q_plain || len(nonce) || nonce, secret) → Expand for key/nonce.
+        ///
+        /// - Parameters:
+        ///   - secret: Exported secret from HPKE context
+        ///   - queryPlain: Original query plaintext
+        ///   - responseNonce: Server-generated nonce
+        /// - Returns: Derived AEAD key and nonce
+        internal func deriveSecrets(
+            secret: SymmetricKey,
+            queryPlain: Data,
+            responseNonce: Data
+        ) throws -> (key: SymmetricKey, nonce: Data) {
+            // Build salt: Q_plain || len(resp_nonce) || resp_nonce
+            var salt = Data()
+            salt.reserveCapacity(queryPlain.count + 2 + responseNonce.count)
+            salt.append(queryPlain)
+            salt.append(bigEndianBytes: UInt16(responseNonce.count))
+            salt.append(responseNonce)
+
+            // Extract PRK
+            let prk = self.ct.kdf.extract(salt: salt, ikm: secret)
+
+            // Expand to get key and nonce
+            let key = self.ct.kdf.expand(
+                prk: prk,
+                info: Data.oDoHKeyInfo,
+                outputByteCount: self.ct.aead.keyByteCount
+            )
+            let nonce = self.ct.kdf.expand(
+                prk: prk,
+                info: Data.oDoHNonceInfo,
+                outputByteCount: self.ct.aead.nonceByteCount
+            )
+
+            return (key, Data(nonce))
+        }
+
+        /// Construct Additional Authenticated Data (AAD) for AEAD operations.
+        ///
+        /// Format: message_type (1 byte) || key_length (2 bytes) || key_data
+        ///
+        /// - Parameters:
+        ///   - type: Message type (query or response)
+        ///   - key: Key identifier or response nonce
+        /// - Returns: AAD bytes for AEAD operations
+        internal func aad(_ type: Message.MessageType, key: Data) -> Data {
+            var aad = Data()
+            let keyLength = UInt16(key.count)
+            aad.reserveCapacity(1 + 2 + key.count)
+            aad.append(type.rawValue)
+            aad.append(bigEndianBytes: keyLength)
+            aad.append(key)
+            return aad
+        }
+    }
+
+    /// ODoH client routine for encrypting queries and decrypting responses.
+    ///
+    /// Handles the client-side cryptographic operations for Oblivious DNS over HTTPS.
+    /// Initialized with a configuration containing the target's public key and algorithm parameters.
+    public struct ClientRoutine {
+        private var core: RoutineCore
+
+        /// Initialize ODoH client routine with target server configuration.
+        ///
+        /// Extracts the HPKE ciphersuite parameters and derives the key identifier
+        /// from the provided configuration. The key identifier is computed using
+        /// HKDF as specified in RFC 9230 Section 6.2.
+        ///
+        /// - Parameter configuration: Target server's ODoH configuration
+        public init(configuration: Configuration) throws {
+            self.core = try RoutineCore(configuration: configuration)
+        }
+
         /// Encrypt DNS query using HPKE for transmission through proxy.
         ///
         /// Returns encrypted message and sender context needed for response decryption.
@@ -125,14 +202,14 @@ public enum ODoH: Sendable {
             queryPlain: MessagePlaintext
         ) throws -> QueryEncryptionResult {
             var context = try HPKE.Sender(
-                recipientKey: self.pkR,
-                ciphersuite: self.ct,
+                recipientKey: self.core.pkR,
+                ciphersuite: self.core.ct,
                 info: Data.oDoHQueryInfo
             )
 
             let sealedData = try context.seal(
                 queryPlain.encode(),
-                authenticating: self.aad(.query, key: self.keyID)
+                authenticating: self.core.aad(.query, key: self.core.keyID)
             )
             let encapsulatedKey = context.encapsulatedKey
 
@@ -146,7 +223,7 @@ public enum ODoH: Sendable {
 
             let message = Message(
                 messageType: .query,
-                keyID: self.keyID,
+                keyID: self.core.keyID,
                 encryptedMessage: encryptedMessage
             )
 
@@ -178,20 +255,20 @@ public enum ODoH: Sendable {
             let responseEncrypted = response.encryptedMessage
 
             // Derive secrets according to RFC
-            let (aeadKey, aeadNonce) = try self.deriveSecrets(
+            let (aeadKey, aeadNonce) = try self.core.deriveSecrets(
                 secret: context.exportSecret(
                     context: Data.oDoHResponseInfo,
-                    outputByteCount: self.ct.aead.keyByteCount
+                    outputByteCount: self.core.ct.aead.keyByteCount
                 ),
                 queryPlain: queryPlain.encode(),
                 responseNonce: responseNonce
             )
 
             // Build AAD for response
-            let aad = self.aad(.response, key: responseNonce)
+            let aad = self.core.aad(.response, key: responseNonce)
 
             // Decrypt using derived key/nonce (regular AEAD, not HPKE)
-            var plaintext = try self.ct.aead.open(
+            var plaintext = try self.core.ct.aead.open(
                 responseEncrypted,
                 nonce: aeadNonce,
                 authenticating: aad,
@@ -262,6 +339,25 @@ public enum ODoH: Sendable {
                 response: response
             )
         }
+    }
+
+    /// ODoH server routine for decrypting queries and encrypting responses.
+    ///
+    /// Handles the server-side cryptographic operations for Oblivious DNS over HTTPS.
+    /// Initialized with a configuration containing the server's public key and algorithm parameters.
+    public struct ServerRoutine {
+        private var core: RoutineCore
+
+        /// Initialize ODoH server routine with server configuration.
+        ///
+        /// Extracts the HPKE ciphersuite parameters and derives the key identifier
+        /// from the provided configuration. The key identifier is computed using
+        /// HKDF as specified in RFC 9230 Section 6.2.
+        ///
+        /// - Parameter configuration: Server's ODoH configuration
+        public init(configuration: Configuration) throws {
+            self.core = try RoutineCore(configuration: configuration)
+        }
 
         /// Decrypt DNS query using server's private key.
         ///
@@ -283,14 +379,14 @@ public enum ODoH: Sendable {
             }
 
             var ciphertext = query.encryptedMessage
-            guard let enc = ciphertext.popFirst(self.ct.kem.encapsulatedKeySize) else {
+            guard let enc = ciphertext.popFirst(self.core.ct.kem.encapsulatedKeySize) else {
                 throw CryptoKitError.incorrectParameterSize
             }
 
             // Setup HPKE recipient context
             var context = try HPKE.Recipient(
                 privateKey: privateKey,
-                ciphersuite: self.ct,
+                ciphersuite: self.core.ct,
                 info: Data.oDoHQueryInfo,
                 encapsulatedKey: enc
             )
@@ -298,7 +394,7 @@ public enum ODoH: Sendable {
             // Decrypt query
             var plaintext = try context.open(
                 ciphertext,
-                authenticating: self.aad(.query, key: self.keyID)
+                authenticating: self.core.aad(.query, key: self.core.keyID)
             )
 
             return QueryDecryptionResult(plaintextQuery: try MessagePlaintext(decoding: &plaintext), context: context)
@@ -337,25 +433,25 @@ public enum ODoH: Sendable {
             responsePlain: MessagePlaintext
         ) throws -> Data {
             // Generate response nonce: random(max(Nn, Nk))
-            let nonceSize = self.ct.aead.nonceByteCount
-            let keySize = self.ct.aead.keyByteCount
+            let nonceSize = self.core.ct.aead.nonceByteCount
+            let keySize = self.core.ct.aead.keyByteCount
             let responseNonceSize = max(nonceSize, keySize)
             let responseNonce = Data((0..<responseNonceSize).map { _ in UInt8.random(in: 0...255) })
 
             // Derive secrets
-            let (aeadKey, aeadNonce) = try self.deriveSecrets(
+            let (aeadKey, aeadNonce) = try self.core.deriveSecrets(
                 secret: recipient.exportSecret(
                     context: Data.oDoHResponseInfo,
-                    outputByteCount: self.ct.aead.keyByteCount
+                    outputByteCount: self.core.ct.aead.keyByteCount
                 ),
                 queryPlain: queryPlain.encode(),
                 responseNonce: responseNonce
             )
 
             // Encrypt response using derived keys (regular AEAD)
-            let encrypted = try self.ct.aead.seal(
+            let encrypted = try self.core.ct.aead.seal(
                 responsePlain.encode(),
-                authenticating: self.aad(.response, key: responseNonce),
+                authenticating: self.core.aad(.response, key: responseNonce),
                 nonce: aeadNonce,
                 using: aeadKey
             )
@@ -391,64 +487,6 @@ public enum ODoH: Sendable {
                 queryPlain: queryDecryptionResult.plaintextQuery,
                 responsePlain: responsePlain
             )
-        }
-
-        /// Derive AEAD key and nonce for response encryption.
-        ///
-        /// Uses HKDF Extract-and-Expand with query plaintext and response nonce as salt.
-        /// Formula: Extract(Q_plain || len(nonce) || nonce, secret) → Expand for key/nonce.
-        ///
-        /// - Parameters:
-        ///   - secret: Exported secret from HPKE context
-        ///   - queryPlain: Original query plaintext
-        ///   - responseNonce: Server-generated nonce
-        /// - Returns: Derived AEAD key and nonce
-        private func deriveSecrets(
-            secret: SymmetricKey,
-            queryPlain: Data,
-            responseNonce: Data
-        ) throws -> (key: SymmetricKey, nonce: Data) {
-            // Build salt: Q_plain || len(resp_nonce) || resp_nonce
-            var salt = Data()
-            salt.reserveCapacity(queryPlain.count + 2 + responseNonce.count)
-            salt.append(queryPlain)
-            salt.append(bigEndianBytes: UInt16(responseNonce.count))
-            salt.append(responseNonce)
-
-            // Extract PRK
-            let prk = self.ct.kdf.extract(salt: salt, ikm: secret)
-
-            // Expand to get key and nonce
-            let key = self.ct.kdf.expand(
-                prk: prk,
-                info: Data.oDoHKeyInfo,
-                outputByteCount: self.ct.aead.keyByteCount
-            )
-            let nonce = self.ct.kdf.expand(
-                prk: prk,
-                info: Data.oDoHNonceInfo,
-                outputByteCount: self.ct.aead.nonceByteCount
-            )
-
-            return (key, Data(nonce))
-        }
-
-        /// Construct Additional Authenticated Data (AAD) for AEAD operations.
-        ///
-        /// Format: message_type (1 byte) || key_length (2 bytes) || key_data
-        ///
-        /// - Parameters:
-        ///   - type: Message type (query or response)
-        ///   - key: Key identifier or response nonce
-        /// - Returns: AAD bytes for AEAD operations
-        private func aad(_ type: Message.MessageType, key: Data) -> Data {
-            var aad = Data()
-            let keyLength = UInt16(key.count)
-            aad.reserveCapacity(1 + 2 + key.count)
-            aad.append(type.rawValue)
-            aad.append(bigEndianBytes: keyLength)
-            aad.append(key)
-            return aad
         }
     }
 
