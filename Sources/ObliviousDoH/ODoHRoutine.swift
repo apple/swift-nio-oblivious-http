@@ -436,7 +436,7 @@ public enum ODoH: Sendable {
             let nonceSize = self.core.ct.aead.nonceByteCount
             let keySize = self.core.ct.aead.keyByteCount
             let responseNonceSize = max(nonceSize, keySize)
-            let responseNonce = Data((0..<responseNonceSize).map { _ in UInt8.random(in: 0...255) })
+            let responseNonce = Data.random(length: responseNonceSize)
 
             // Derive secrets
             let (aeadKey, aeadNonce) = try self.core.deriveSecrets(

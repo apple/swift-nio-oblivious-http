@@ -82,6 +82,27 @@ extension Data {
     package init(_ key: SymmetricKey) {
         self = key.withUnsafeBytes { Data($0) }
     }
+
+    package static func random(length: Int) -> Self {
+        guard length > 0 else { return Data() }
+
+        var data = Data()
+        data.reserveCapacity(length)
+        let fullChunks = length / 8
+        let remainder = length % 8
+
+        // Generate 8 bytes at a time
+        for _ in 0..<fullChunks {
+            let chunk = UInt64.random(in: UInt64.min...UInt64.max)
+            data.append(contentsOf: Swift.withUnsafeBytes(of: chunk) { Data($0) })
+        }
+
+        let finalChunk = UInt64.random(in: UInt64.min...UInt64.max)
+        let finalData = Swift.withUnsafeBytes(of: finalChunk) { Data($0) }
+        data.append(contentsOf: finalData.prefix(remainder))
+
+        return data
+    }
 }
 
 // MARK: - UInt16 Network Identifier Extensions
