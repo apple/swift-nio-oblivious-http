@@ -88,8 +88,7 @@ extension Data {
 
         var data = Data()
         data.reserveCapacity(length)
-        let fullChunks = length / 8
-        let remainder = length % 8
+        let (fullChunks, remainder) = length.quotientAndRemainder(dividingBy: 8)
 
         // Generate 8 bytes at a time
         for _ in 0..<fullChunks {
