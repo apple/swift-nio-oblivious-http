@@ -20,7 +20,476 @@ import FoundationEssentials
 import Foundation
 #endif
 
+/// Implementation of Oblivious DNS over HTTPS (ODoH) as specified in RFC 9230.
+/// ```swift
+/// // CLIENT SIDE - Parse configurations and encrypt query
+///
+/// // 1. Fetch and parse configurations from target resolver's well-known endpoint
+/// var configData: Data = fetchConfigsFromWellKnown() // GET /.well-known/odohconfigs
+/// let configResults: [ODoH.Configuration] = try .init(decoding: &configData)
+///
+/// // 2. Select preferred configuration (e.g., version 1)
+/// guard let selectedConfig = configResults.first(version: 0x0001) else {
+///     // Handle error
+/// }
+///
+/// // 3. Initialize ODoH client routine with selected configuration
+/// let clientRoutine = try ODoH.ClientRoutine(configuration: selectedConfig)
+///
+/// // 4. Create DNS query with padding for privacy
+/// let dnsQuery: Data = buildDNSQuery(domain: "example.com", type: .A)
+/// let queryPlaintext = ODoH.MessagePlaintext(dnsMessage: dnsQuery, paddingLength: 16)
+///
+/// // 5. Encrypt query for transmission through proxy
+/// let queryResult = try clientRoutine.encryptQuery(queryPlain: queryPlaintext)
+///
+/// // 6. Send encryptedQuery through proxy to target resolver...
+/// let encryptedResponse = sendThroughProxy(queryResult.encryptedQuery, to: targetResolver)
+///
+/// // 7. Decrypt response when received back through proxy
+/// let responseMessage = try clientRoutine.decryptResponse(
+///     context: queryResult.context,
+///     queryPlain: queryPlaintext,
+///     responseData: encryptedResponse
+/// )
+/// let dnsResponse = responseMessage.dnsMessage
+///
+/// // SERVER SIDE - Create configuration, decrypt query, encrypt response
+///
+/// // 1. Server creates and publishes configuration
+/// let serverPrivateKey = Curve25519.KeyAgreement.PrivateKey()
+/// let serverConfig = try ODoH.Configuration.v1(privateKey: serverPrivateKey)
+/// let serverRoutine = try ODoH.ServerRoutine(configuration: serverConfig)
+///
+/// // 2. Publish configuration at well-known endpoint
+/// let configsToPublish: [ODoH.Configuration] = [serverConfig]
+/// serveAtWellKnown(try configsToPublish.encode()) // Serve at /.well-known/odohconfigs
+///
+/// // 3. Decrypt incoming query from proxy
+/// let queryResult = try serverRoutine.decryptQuery(
+///     queryData: encryptedQuery,
+///     privateKey: serverPrivateKey
+/// )
+///
+/// // 4. Process the DNS query
+/// let dnsAnswer = resolveDNSQuery(queryResult.plaintextQuery.dnsMessage)
+/// let responsePayload = ODoH.MessagePlaintext(dnsMessage: dnsAnswer, paddingLength: 0)
+///
+/// // 5. Encrypt response for client
+/// let encryptedResponse = try serverRoutine.encryptResponse(
+///     recipient: queryResult.context,
+///     queryPlain: queryResult.plaintextQuery,
+///     responsePlain: responsePayload
+/// )
+///
+/// // 6. Send encrypted response back through proxy to client...
+/// ```
 public enum ODoH: Sendable {
+    /// Shared helpers for ODoH cryptographic routines.
+    ///
+    /// Contains common functionality for both client and server ODoH operations.
+    /// Initialized with a configuration containing the target's public key and algorithm parameters.
+    internal struct RoutineCore {
+        internal var ct: HPKE.Ciphersuite
+        internal var pkR: any HPKEDiffieHellmanPublicKey
+        internal var keyID: Data
+
+        /// Initialize ODoH encryption with target server configuration.
+        ///
+        /// Extracts the HPKE ciphersuite parameters and derives the key identifier
+        /// from the provided configuration. The key identifier is computed using
+        /// HKDF as specified in RFC 9230 Section 6.2.
+        ///
+        /// - Parameter configuration: Target server's ODoH configuration
+        internal init(configuration: Configuration) throws {
+            guard configuration.contents.aead != .exportOnly else {
+                throw ObliviousDoHError.unsupportedHPKEParameters
+            }
+
+            self.ct = HPKE.Ciphersuite(
+                kem: configuration.contents.kem,
+                kdf: configuration.contents.kdf,
+                aead: configuration.contents.aead
+            )
+            self.pkR = try self.ct.kem.getPublicKey(data: configuration.contents.publicKey)
+            self.keyID = configuration.contents.identifier
+        }
+
+        /// Derive AEAD key and nonce for response encryption.
+        ///
+        /// Uses HKDF Extract-and-Expand with query plaintext and response nonce as salt.
+        /// Formula: Extract(Q_plain || len(nonce) || nonce, secret) → Expand for key/nonce.
+        ///
+        /// - Parameters:
+        ///   - secret: Exported secret from HPKE context
+        ///   - queryPlain: Original query plaintext
+        ///   - responseNonce: Server-generated nonce
+        /// - Returns: Derived AEAD key and nonce
+        internal func deriveSecrets(
+            secret: SymmetricKey,
+            queryPlain: Data,
+            responseNonce: Data
+        ) throws -> (key: SymmetricKey, nonce: Data) {
+            // Build salt: Q_plain || len(resp_nonce) || resp_nonce
+            var salt = Data()
+            salt.reserveCapacity(queryPlain.count + 2 + responseNonce.count)
+            salt.append(queryPlain)
+            salt.append(bigEndianBytes: UInt16(responseNonce.count))
+            salt.append(responseNonce)
+
+            // Extract PRK
+            let prk = self.ct.kdf.extract(salt: salt, ikm: secret)
+
+            // Expand to get key and nonce
+            let key = self.ct.kdf.expand(
+                prk: prk,
+                info: Data.oDoHKeyInfo,
+                outputByteCount: self.ct.aead.keyByteCount
+            )
+            let nonce = self.ct.kdf.expand(
+                prk: prk,
+                info: Data.oDoHNonceInfo,
+                outputByteCount: self.ct.aead.nonceByteCount
+            )
+
+            return (key, Data(nonce))
+        }
+
+        /// Construct Additional Authenticated Data (AAD) for AEAD operations.
+        ///
+        /// Format: message_type (1 byte) || key_length (2 bytes) || key_data
+        ///
+        /// - Parameters:
+        ///   - type: Message type (query or response)
+        ///   - key: Key identifier or response nonce
+        /// - Returns: AAD bytes for AEAD operations
+        internal func aad(_ type: Message.MessageType, key: Data) -> Data {
+            var aad = Data()
+            let keyLength = UInt16(key.count)
+            aad.reserveCapacity(1 + 2 + key.count)
+            aad.append(type.rawValue)
+            aad.append(bigEndianBytes: keyLength)
+            aad.append(key)
+            return aad
+        }
+    }
+
+    /// ODoH client routine for encrypting queries and decrypting responses.
+    ///
+    /// Handles the client-side cryptographic operations for Oblivious DNS over HTTPS.
+    /// Initialized with a configuration containing the target's public key and algorithm parameters.
+    public struct ClientRoutine {
+        private var core: RoutineCore
+
+        /// Initialize ODoH client routine with target server configuration.
+        ///
+        /// Extracts the HPKE ciphersuite parameters and derives the key identifier
+        /// from the provided configuration. The key identifier is computed using
+        /// HKDF as specified in RFC 9230 Section 6.2.
+        ///
+        /// - Parameter configuration: Target server's ODoH configuration
+        public init(configuration: Configuration) throws {
+            self.core = try RoutineCore(configuration: configuration)
+        }
+
+        /// Encrypt DNS query using HPKE for transmission through proxy.
+        ///
+        /// Returns encrypted message and sender context needed for response decryption.
+        ///
+        /// - Parameter queryPlain: DNS query with padding
+        /// - Returns: Query encryption result containing encrypted data and context
+        public func encryptQuery(
+            queryPlain: MessagePlaintext
+        ) throws -> QueryEncryptionResult {
+            var context = try HPKE.Sender(
+                recipientKey: self.core.pkR,
+                ciphersuite: self.core.ct,
+                info: Data.oDoHQueryInfo
+            )
+
+            let sealedData = try context.seal(
+                queryPlain.encode(),
+                authenticating: self.core.aad(.query, key: self.core.keyID)
+            )
+            let encapsulatedKey = context.encapsulatedKey
+
+            var encryptedMessage = Data()
+            encryptedMessage.append(encapsulatedKey)
+            encryptedMessage.append(sealedData)
+
+            guard encryptedMessage.count <= UInt16.max else {
+                throw ObliviousDoHError.invalidODoHLength(length: encryptedMessage.count)
+            }
+
+            let message = Message(
+                messageType: .query,
+                keyID: self.core.keyID,
+                encryptedMessage: encryptedMessage
+            )
+
+            return QueryEncryptionResult(encryptedQuery: message.encode(), context: context)
+        }
+
+        /// Decrypt DNS response using HPKE context and derived keys.
+        ///
+        /// Uses HPKE secret export and HKDF to derive response decryption keys.
+        ///
+        /// - Parameters:
+        ///   - context: HPKE sender context from query encryption
+        ///   - queryPlain: Original query plaintext (used in key derivation)
+        ///   - response: Encrypted response from server (in Message format)
+        /// - Returns: Decrypted DNS response
+        public func decryptResponse(
+            context: HPKE.Sender,
+            queryPlain: MessagePlaintext,
+            response: Message
+        ) throws -> MessagePlaintext {
+            guard response.messageType == .response else {
+                throw ObliviousDoHError.invalidMessageType(
+                    expected: .response,
+                    actual: response.messageType
+                )
+            }
+
+            let responseNonce = response.keyID  // For responses, keyID field contains the nonce
+            let responseEncrypted = response.encryptedMessage
+
+            // Derive secrets according to RFC
+            let (aeadKey, aeadNonce) = try self.core.deriveSecrets(
+                secret: context.exportSecret(
+                    context: Data.oDoHResponseInfo,
+                    outputByteCount: self.core.ct.aead.keyByteCount
+                ),
+                queryPlain: queryPlain.encode(),
+                responseNonce: responseNonce
+            )
+
+            // Build AAD for response
+            let aad = self.core.aad(.response, key: responseNonce)
+
+            // Decrypt using derived key/nonce (regular AEAD, not HPKE)
+            var plaintext = try self.core.ct.aead.open(
+                responseEncrypted,
+                nonce: aeadNonce,
+                authenticating: aad,
+                using: aeadKey
+            )
+
+            return try MessagePlaintext(decoding: &plaintext)
+        }
+
+        /// Decrypt DNS response using HPKE context and derived keys.
+        ///
+        /// Uses HPKE secret export and HKDF to derive response decryption keys.
+        ///
+        /// - Parameters:
+        ///   - context: HPKE sender context from query encryption
+        ///   - queryPlain: Original query plaintext (used in key derivation)
+        ///   - responseData: Encrypted response from server
+        /// - Returns: Decrypted DNS response
+        public func decryptResponse(
+            context: HPKE.Sender,
+            queryPlain: MessagePlaintext,
+            responseData: consuming Data
+        ) throws -> MessagePlaintext {
+            // Parse the response message
+            let response = try Message(decoding: &responseData)
+
+            return try self.decryptResponse(context: context, queryPlain: queryPlain, response: response)
+        }
+
+        /// Decrypt DNS response using query encryption result.
+        ///
+        /// Convenience method that extracts the context from a QueryEncryptionResult.
+        ///
+        /// - Parameters:
+        ///   - queryEncryptionResult: Result from encrypting the original query
+        ///   - queryPlain: Original query plaintext (used in key derivation)
+        ///   - responseData: Encrypted response from server
+        /// - Returns: Decrypted DNS response
+        public func decryptResponse(
+            queryEncryptionResult: QueryEncryptionResult,
+            queryPlain: MessagePlaintext,
+            responseData: consuming Data
+        ) throws -> MessagePlaintext {
+            try self.decryptResponse(
+                context: queryEncryptionResult.context,
+                queryPlain: queryPlain,
+                responseData: responseData
+            )
+        }
+
+        /// Decrypt DNS response using query encryption result.
+        ///
+        /// Convenience method that extracts the context from a QueryEncryptionResult.
+        ///
+        /// - Parameters:
+        ///   - queryEncryptionResult: Result from encrypting the original query
+        ///   - queryPlain: Original query plaintext (used in key derivation)
+        ///   - response: Encrypted response from server (in Message format)
+        /// - Returns: Decrypted DNS response
+        public func decryptResponse(
+            queryEncryptionResult: QueryEncryptionResult,
+            queryPlain: MessagePlaintext,
+            response: Message
+        ) throws -> MessagePlaintext {
+            try self.decryptResponse(
+                context: queryEncryptionResult.context,
+                queryPlain: queryPlain,
+                response: response
+            )
+        }
+    }
+
+    /// ODoH server routine for decrypting queries and encrypting responses.
+    ///
+    /// Handles the server-side cryptographic operations for Oblivious DNS over HTTPS.
+    /// Initialized with a configuration containing the server's public key and algorithm parameters.
+    public struct ServerRoutine {
+        private var core: RoutineCore
+
+        /// Initialize ODoH server routine with server configuration.
+        ///
+        /// Extracts the HPKE ciphersuite parameters and derives the key identifier
+        /// from the provided configuration. The key identifier is computed using
+        /// HKDF as specified in RFC 9230 Section 6.2.
+        ///
+        /// - Parameter configuration: Server's ODoH configuration
+        public init(configuration: Configuration) throws {
+            self.core = try RoutineCore(configuration: configuration)
+        }
+
+        /// Decrypt DNS query using server's private key.
+        ///
+        /// Establishes HPKE recipient context needed for response encryption.
+        ///
+        /// - Parameters:
+        ///   - query: Encrypted query from proxy
+        ///   - privateKey: Server's private key
+        /// - Returns: Query decryption result containing plaintext and context
+        public func decryptQuery<PrivateKey: HPKEDiffieHellmanPrivateKey>(
+            query: Message,
+            privateKey: PrivateKey
+        ) throws -> QueryDecryptionResult {
+            guard query.messageType == .query else {
+                throw ObliviousDoHError.invalidMessageType(
+                    expected: .query,
+                    actual: query.messageType
+                )
+            }
+
+            var ciphertext = query.encryptedMessage
+            guard let enc = ciphertext.popFirst(self.core.ct.kem.encapsulatedKeySize) else {
+                throw CryptoKitError.incorrectParameterSize
+            }
+
+            // Setup HPKE recipient context
+            var context = try HPKE.Recipient(
+                privateKey: privateKey,
+                ciphersuite: self.core.ct,
+                info: Data.oDoHQueryInfo,
+                encapsulatedKey: enc
+            )
+
+            // Decrypt query
+            var plaintext = try context.open(
+                ciphertext,
+                authenticating: self.core.aad(.query, key: self.core.keyID)
+            )
+
+            return QueryDecryptionResult(plaintextQuery: try MessagePlaintext(decoding: &plaintext), context: context)
+        }
+
+        /// Decrypt DNS query using server's private key.
+        ///
+        /// Establishes HPKE recipient context needed for response encryption.
+        ///
+        /// - Parameters:
+        ///   - queryData: Encrypted query from proxy
+        ///   - privateKey: Server's private key
+        /// - Returns: Query decryption result containing plaintext and context
+        public func decryptQuery<PrivateKey: HPKEDiffieHellmanPrivateKey>(
+            queryData: consuming Data,
+            privateKey: PrivateKey
+        ) throws -> QueryDecryptionResult {
+            // Parse the query message
+            let query = try Message(decoding: &queryData)
+
+            return try self.decryptQuery(query: query, privateKey: privateKey)
+        }
+
+        /// Encrypt DNS response using derived keys from HPKE context.
+        ///
+        /// Uses HPKE secret export and random nonce for stateless operation.
+        ///
+        /// - Parameters:
+        ///   - recipient: HPKE recipient context from query decryption
+        ///   - queryPlain: Original query (used in key derivation)
+        ///   - responsePlain: DNS response to encrypt
+        /// - Returns: Encrypted response message
+        public func encryptResponse(
+            recipient: HPKE.Recipient,
+            queryPlain: MessagePlaintext,
+            responsePlain: MessagePlaintext
+        ) throws -> Data {
+            // Generate response nonce: random(max(Nn, Nk))
+            let nonceSize = self.core.ct.aead.nonceByteCount
+            let keySize = self.core.ct.aead.keyByteCount
+            let responseNonceSize = max(nonceSize, keySize)
+            let responseNonce = Data.random(length: responseNonceSize)
+
+            // Derive secrets
+            let (aeadKey, aeadNonce) = try self.core.deriveSecrets(
+                secret: recipient.exportSecret(
+                    context: Data.oDoHResponseInfo,
+                    outputByteCount: self.core.ct.aead.keyByteCount
+                ),
+                queryPlain: queryPlain.encode(),
+                responseNonce: responseNonce
+            )
+
+            // Encrypt response using derived keys (regular AEAD)
+            let encrypted = try self.core.ct.aead.seal(
+                responsePlain.encode(),
+                authenticating: self.core.aad(.response, key: responseNonce),
+                nonce: aeadNonce,
+                using: aeadKey
+            )
+
+            guard encrypted.count <= UInt16.max else {
+                throw ObliviousDoHError.invalidODoHLength(length: encrypted.count)
+            }
+
+            // Build response message (reusing Message structure, keyID holds nonce for responses)
+            let message = Message(
+                messageType: .response,
+                keyID: responseNonce,
+                encryptedMessage: encrypted
+            )
+
+            return message.encode()
+        }
+
+        /// Encrypt DNS response using query decryption result.
+        ///
+        /// Convenience method that uses the context and plaintext from a QueryDecryptionResult.
+        ///
+        /// - Parameters:
+        ///   - queryDecryptionResult: Result from decrypting the original query
+        ///   - responsePlain: DNS response to encrypt
+        /// - Returns: Encrypted response message
+        public func encryptResponse(
+            queryDecryptionResult: QueryDecryptionResult,
+            responsePlain: MessagePlaintext
+        ) throws -> Data {
+            try self.encryptResponse(
+                recipient: queryDecryptionResult.context,
+                queryPlain: queryDecryptionResult.plaintextQuery,
+                responsePlain: responsePlain
+            )
+        }
+    }
+
     // - MARK: Protocol Types
 
     /// Result of encrypting a DNS query for transmission through a proxy.
