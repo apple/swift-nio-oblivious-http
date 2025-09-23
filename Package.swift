@@ -19,10 +19,6 @@ let strictConcurrencyDevelopment = false
 
 let strictConcurrencySettings: [SwiftSetting] = {
     var initialSettings: [SwiftSetting] = []
-    initialSettings.append(contentsOf: [
-        .enableUpcomingFeature("StrictConcurrency"),
-        .enableUpcomingFeature("InferSendableFromCaptures"),
-    ])
 
     if strictConcurrencyDevelopment {
         // -warnings-as-errors here is a workaround so that IDE-based development can
@@ -88,7 +84,8 @@ let package = Package(
             name: "ObliviousXHelpers",
             dependencies: [
                 .product(name: "Crypto", package: "swift-crypto")
-            ]
+            ],
+            swiftSettings: strictConcurrencySettings
         ),
         .testTarget(
             name: "ObliviousHTTPTests",
