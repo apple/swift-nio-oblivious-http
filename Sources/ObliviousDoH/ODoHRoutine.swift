@@ -89,10 +89,10 @@ public enum ODoH: Sendable {
     ///
     /// Contains common functionality for both client and server ODoH operations.
     /// Initialized with a configuration containing the target's public key and algorithm parameters.
-    internal struct RoutineCore {
-        internal var ct: HPKE.Ciphersuite
-        internal var pkR: any HPKEDiffieHellmanPublicKey
-        internal var keyID: Data
+    internal struct RoutineCore: Sendable {
+        internal let ct: HPKE.Ciphersuite
+        internal let pkR: any HPKEDiffieHellmanPublicKey
+        internal let keyID: Data
 
         /// Initialize ODoH encryption with target server configuration.
         ///
@@ -178,7 +178,7 @@ public enum ODoH: Sendable {
     ///
     /// Handles the client-side cryptographic operations for Oblivious DNS over HTTPS.
     /// Initialized with a configuration containing the target's public key and algorithm parameters.
-    public struct ClientRoutine {
+    public struct ClientRoutine: Sendable {
         private var core: RoutineCore
 
         /// Initialize ODoH client routine with target server configuration.
@@ -345,7 +345,7 @@ public enum ODoH: Sendable {
     ///
     /// Handles the server-side cryptographic operations for Oblivious DNS over HTTPS.
     /// Initialized with a configuration containing the server's public key and algorithm parameters.
-    public struct ServerRoutine {
+    public struct ServerRoutine: Sendable {
         private var core: RoutineCore
 
         /// Initialize ODoH server routine with server configuration.
