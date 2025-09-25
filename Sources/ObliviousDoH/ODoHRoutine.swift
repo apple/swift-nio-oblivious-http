@@ -90,9 +90,9 @@ public enum ODoH: Sendable {
     /// Contains common functionality for both client and server ODoH operations.
     /// Initialized with a configuration containing the target's public key and algorithm parameters.
     internal struct RoutineCore: Sendable {
-        internal let ct: HPKE.Ciphersuite
-        internal let pkR: any HPKEDiffieHellmanPublicKey
-        internal let keyID: Data
+        internal var ct: HPKE.Ciphersuite
+        internal var pkR: any HPKEDiffieHellmanPublicKey
+        internal var keyID: Data
 
         /// Initialize ODoH encryption with target server configuration.
         ///
