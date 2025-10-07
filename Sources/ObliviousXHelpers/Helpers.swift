@@ -231,7 +231,7 @@ extension HPKE.KEM {
             )
         #if !canImport(Darwin) || canImport(CryptoKit, _version: 324.0.4)
         case .XWingMLKEM768X25519:
-        if #available(iOS 26.0, macOS 26.0, watchOS 26.0, tvOS 26.0, *) {
+        if #available(iOS 26.0, macOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *) {
             return try HPKE.Sender(
                 recipientKey: Crypto.XWingMLKEM768X25519.PublicKey(rawRepresentation: publicKeyData),
                 ciphersuite: ciphersuite,
@@ -260,7 +260,7 @@ extension HPKE.KEM {
             _ = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: publicKeyData)
         #if !canImport(Darwin) || canImport(CryptoKit, _version: 324.0.4)
         case .XWingMLKEM768X25519:
-        if #available(iOS 26.0, macOS 26.0, watchOS 26.0, tvOS 26.0, *) {
+        if #available(iOS 26.0, macOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *) {
             _ = try Crypto.XWingMLKEM768X25519.PublicKey(rawRepresentation: publicKeyData)
         } else {
             fatalError("Impossible to have an XWing key in this context without it being available.")
