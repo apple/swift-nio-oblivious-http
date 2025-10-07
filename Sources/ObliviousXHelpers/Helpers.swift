@@ -122,7 +122,7 @@ extension UInt16 {
             self = 0x0020
         #if !canImport(Darwin) || canImport(CryptoKit, _version: 324.0.4)
         case .XWingMLKEM768X25519:
-            self = 0x647a // https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem-06#name-iana-considerations
+            self = 0x647a  // https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem-06#name-iana-considerations
         #endif
         #if canImport(CryptoKit)
         @unknown default:
@@ -231,15 +231,15 @@ extension HPKE.KEM {
             )
         #if !canImport(Darwin) || canImport(CryptoKit, _version: 324.0.4)
         case .XWingMLKEM768X25519:
-        if #available(iOS 26.0, macOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *) {
-            return try HPKE.Sender(
-                recipientKey: Crypto.XWingMLKEM768X25519.PublicKey(rawRepresentation: publicKeyData),
-                ciphersuite: ciphersuite,
-                info: info
-            )
-        } else {
-            fatalError("Impossible to have an XWing key in this context without it being available.")
-        }
+            if #available(iOS 26.0, macOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *) {
+                return try HPKE.Sender(
+                    recipientKey: Crypto.XWingMLKEM768X25519.PublicKey(rawRepresentation: publicKeyData),
+                    ciphersuite: ciphersuite,
+                    info: info
+                )
+            } else {
+                fatalError("Impossible to have an XWing key in this context without it being available.")
+            }
         #endif
         #if canImport(CryptoKit)
         @unknown default:
@@ -260,11 +260,11 @@ extension HPKE.KEM {
             _ = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: publicKeyData)
         #if !canImport(Darwin) || canImport(CryptoKit, _version: 324.0.4)
         case .XWingMLKEM768X25519:
-        if #available(iOS 26.0, macOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *) {
-            _ = try Crypto.XWingMLKEM768X25519.PublicKey(rawRepresentation: publicKeyData)
-        } else {
-            fatalError("Impossible to have an XWing key in this context without it being available.")
-        }
+            if #available(iOS 26.0, macOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *) {
+                _ = try Crypto.XWingMLKEM768X25519.PublicKey(rawRepresentation: publicKeyData)
+            } else {
+                fatalError("Impossible to have an XWing key in this context without it being available.")
+            }
         #endif
         #if canImport(CryptoKit)
         @unknown default:
