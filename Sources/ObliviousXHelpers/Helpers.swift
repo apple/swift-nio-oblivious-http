@@ -122,7 +122,8 @@ extension UInt16 {
             self = 0x0020
         #if !canImport(Darwin) || canImport(CryptoKit, _version: 324.0.4)
         case .XWingMLKEM768X25519:
-            self = 0x647a  // https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem-06#name-iana-considerations
+            // https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem-06#name-iana-considerations
+            self = 0x647a
         #endif
         #if canImport(CryptoKit)
         @unknown default:
