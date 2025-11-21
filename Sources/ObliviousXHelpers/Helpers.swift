@@ -120,6 +120,11 @@ extension UInt16 {
             self = 0x0012
         case .Curve25519_HKDF_SHA256:
             self = 0x0020
+        #if !canImport(Darwin) || canImport(CryptoKit, _version: 324.0.4)
+        case .XWingMLKEM768X25519:
+            // https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem-06#name-iana-considerations
+            self = 0x647a
+        #endif
         #if canImport(CryptoKit)
         @unknown default:
             fatalError("Unsupported KEM")
@@ -188,6 +193,10 @@ extension HPKE.KEM {
             return 133
         case .Curve25519_HKDF_SHA256:
             return 32
+        #if !canImport(Darwin) || canImport(CryptoKit, _version: 324.0.4)
+        case .XWingMLKEM768X25519:
+            return 1120
+        #endif
         #if canImport(CryptoKit)
         @unknown default:
             fatalError("Unsupported KEM")
@@ -195,16 +204,69 @@ extension HPKE.KEM {
         }
     }
 
-    package func getPublicKey(data: Data) throws -> any HPKEDiffieHellmanPublicKey {
+    package func getSender(publicKeyData: Data, ciphersuite: HPKE.Ciphersuite, info: Data) throws -> HPKE.Sender {
         switch self {
         case .P256_HKDF_SHA256:
-            return try P256.KeyAgreement.PublicKey(rawRepresentation: data)
+            return try HPKE.Sender(
+                recipientKey: P256.KeyAgreement.PublicKey(rawRepresentation: publicKeyData),
+                ciphersuite: ciphersuite,
+                info: info
+            )
         case .P384_HKDF_SHA384:
-            return try P384.KeyAgreement.PublicKey(rawRepresentation: data)
+            return try HPKE.Sender(
+                recipientKey: P384.KeyAgreement.PublicKey(rawRepresentation: publicKeyData),
+                ciphersuite: ciphersuite,
+                info: info
+            )
         case .P521_HKDF_SHA512:
-            return try P521.KeyAgreement.PublicKey(rawRepresentation: data)
+            return try HPKE.Sender(
+                recipientKey: P521.KeyAgreement.PublicKey(rawRepresentation: publicKeyData),
+                ciphersuite: ciphersuite,
+                info: info
+            )
         case .Curve25519_HKDF_SHA256:
-            return try Curve25519.KeyAgreement.PublicKey(rawRepresentation: data)
+            return try HPKE.Sender(
+                recipientKey: Curve25519.KeyAgreement.PublicKey(rawRepresentation: publicKeyData),
+                ciphersuite: ciphersuite,
+                info: info
+            )
+        #if !canImport(Darwin) || canImport(CryptoKit, _version: 324.0.4)
+        case .XWingMLKEM768X25519:
+            if #available(iOS 26.0, macOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *) {
+                return try HPKE.Sender(
+                    recipientKey: Crypto.XWingMLKEM768X25519.PublicKey(rawRepresentation: publicKeyData),
+                    ciphersuite: ciphersuite,
+                    info: info
+                )
+            } else {
+                fatalError("Impossible to have an XWing key in this context without it being available.")
+            }
+        #endif
+        #if canImport(CryptoKit)
+        @unknown default:
+            fatalError("Unsupported KEM")
+        #endif
+        }
+    }
+
+    package func validateKey(publicKeyData: Data) throws {
+        switch self {
+        case .P256_HKDF_SHA256:
+            _ = try P256.KeyAgreement.PublicKey(rawRepresentation: publicKeyData)
+        case .P384_HKDF_SHA384:
+            _ = try P384.KeyAgreement.PublicKey(rawRepresentation: publicKeyData)
+        case .P521_HKDF_SHA512:
+            _ = try P521.KeyAgreement.PublicKey(rawRepresentation: publicKeyData)
+        case .Curve25519_HKDF_SHA256:
+            _ = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: publicKeyData)
+        #if !canImport(Darwin) || canImport(CryptoKit, _version: 324.0.4)
+        case .XWingMLKEM768X25519:
+            if #available(iOS 26.0, macOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *) {
+                _ = try Crypto.XWingMLKEM768X25519.PublicKey(rawRepresentation: publicKeyData)
+            } else {
+                fatalError("Impossible to have an XWing key in this context without it being available.")
+            }
+        #endif
         #if canImport(CryptoKit)
         @unknown default:
             fatalError("Unsupported KEM")

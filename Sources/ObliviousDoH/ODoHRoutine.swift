@@ -91,7 +91,7 @@ public enum ODoH: Sendable {
     /// Initialized with a configuration containing the target's public key and algorithm parameters.
     internal struct RoutineCore: Sendable {
         internal var ct: HPKE.Ciphersuite
-        internal var pkR: any HPKEDiffieHellmanPublicKey
+        internal var pkData: Data
         internal var keyID: Data
 
         /// Initialize ODoH encryption with target server configuration.
@@ -111,7 +111,7 @@ public enum ODoH: Sendable {
                 kdf: configuration.contents.kdf,
                 aead: configuration.contents.aead
             )
-            self.pkR = try self.ct.kem.getPublicKey(data: configuration.contents.publicKey)
+            self.pkData = configuration.contents.publicKey
             self.keyID = configuration.contents.identifier
         }
 
@@ -201,8 +201,8 @@ public enum ODoH: Sendable {
         public func encryptQuery(
             queryPlain: MessagePlaintext
         ) throws -> QueryEncryptionResult {
-            var context = try HPKE.Sender(
-                recipientKey: self.core.pkR,
+            var context = try self.core.ct.kem.getSender(
+                publicKeyData: self.core.pkData,
                 ciphersuite: self.core.ct,
                 info: Data.oDoHQueryInfo
             )
@@ -1034,7 +1034,7 @@ extension ODoH.ConfigurationContents: ODoH.Encodable {
 
         // Try to validate the public key by attempting to create a key instance
         do {
-            _ = try kem.getPublicKey(data: key)
+            _ = try kem.validateKey(publicKeyData: key)
         } catch {
             return .failure(.invalidPublicKey(kemID: kemID, key: key))
         }
