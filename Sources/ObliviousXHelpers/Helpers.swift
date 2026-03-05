@@ -178,6 +178,14 @@ extension HPKE.KEM {
             self = .P521_HKDF_SHA512
         case 0x0020:
             self = .Curve25519_HKDF_SHA256
+        #if !canImport(Darwin) || canImport(CryptoKit, _version: 324.0.4)
+        case 0x647a:
+            if #available(iOS 26.0, macOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *) {
+                self = .XWingMLKEM768X25519
+            } else {
+                return nil
+            }
+        #endif
         default:
             return nil
         }

@@ -52,6 +52,31 @@ public enum OHTTPEncapsulation: Sendable {
         return (payload, streamer.sender)
     }
 
+    #if !canImport(Darwin) || canImport(CryptoKit, _version: 324.0.4)
+    /// Encapsulate a request message using a KEM public key.
+    @available(iOS 26.0, macOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
+    public static func encapsulateRequest<
+        PublicKey: HPKEKEMPublicKey,
+        Message: DataProtocol
+    >(
+        keyID: UInt8,
+        publicKey: PublicKey,
+        ciphersuite: HPKE.Ciphersuite,
+        mediaType: String,
+        content: Message
+    ) throws -> (Data, HPKE.Sender) {
+        var streamer = try StreamingRequest(
+            keyID: keyID,
+            publicKey: publicKey,
+            ciphersuite: ciphersuite,
+            mediaType: mediaType
+        )
+        var payload = streamer.header
+        try payload.append(streamer.encapsulate(content: content, final: false))
+        return (payload, streamer.sender)
+    }
+    #endif
+
     /// Stream a request in multiple chunks.
     public struct StreamingRequest: Sendable {
         /// Bytes representation of header.
@@ -80,6 +105,26 @@ public enum OHTTPEncapsulation: Sendable {
             header.append(self.sender.encapsulatedKey)
             self.header = header
         }
+
+        #if !canImport(Darwin) || canImport(CryptoKit, _version: 324.0.4)
+        /// Initialise with a KEM public key.
+        @available(iOS 26.0, macOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
+        public init<PublicKey: HPKEKEMPublicKey>(
+            keyID: UInt8,
+            publicKey: PublicKey,
+            ciphersuite: HPKE.Ciphersuite,
+            mediaType: String
+        ) throws {
+            var header = OHTTPEncapsulation.buildHeader(keyID: keyID, ciphersuite: ciphersuite)
+            self.sender = try HPKE.Sender(
+                recipientKey: publicKey,
+                ciphersuite: ciphersuite,
+                info: OHTTPEncapsulation.buildInfo(header: header, mediaType: mediaType)
+            )
+            header.append(self.sender.encapsulatedKey)
+            self.header = header
+        }
+        #endif
 
         /// Encapsulate a message chunk
         /// - Parameters:
@@ -185,6 +230,29 @@ public enum OHTTPEncapsulation: Sendable {
             )
         }
 
+        #if !canImport(Darwin) || canImport(CryptoKit, _version: 324.0.4)
+        /// Initialise with a KEM private key, preparing to remove oblivious encapsulation.
+        @available(iOS 26.0, macOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
+        public init<PrivateKey: HPKEKEMPrivateKey>(
+            requestHeader: RequestHeader,
+            mediaType: String,
+            privateKey: PrivateKey
+        ) throws {
+            self.header = requestHeader
+            let info = OHTTPEncapsulation.buildInfo(header: self.header.headerBytes, mediaType: mediaType)
+            self.recipient = try HPKE.Recipient(
+                privateKey: privateKey,
+                ciphersuite: HPKE.Ciphersuite(
+                    kem: self.header.kem,
+                    kdf: self.header.kdf,
+                    aead: self.header.aead
+                ),
+                info: info,
+                encapsulatedKey: self.header.encapsulatedKey
+            )
+        }
+        #endif
+
         /// Remove encapsulation from a message
         /// - Parameters:
         ///   - content: The message chunk to remove encapsulation from.
@@ -288,6 +356,23 @@ public enum OHTTPEncapsulation: Sendable {
             let decrypted = try decapsulator.decapsulate(content: self.message, final: false)
             return (decrypted, decapsulator.recipient)
         }
+
+        #if !canImport(Darwin) || canImport(CryptoKit, _version: 324.0.4)
+        /// Remove oblivious encapsulation using a KEM private key.
+        @available(iOS 26.0, macOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
+        public func decapsulate<PrivateKey: HPKEKEMPrivateKey>(
+            mediaType: String,
+            privateKey: PrivateKey
+        ) throws -> (Data, HPKE.Recipient) {
+            var decapsulator = try StreamingRequestDecapsulator(
+                requestHeader: self.header,
+                mediaType: mediaType,
+                privateKey: privateKey
+            )
+            let decrypted = try decapsulator.decapsulate(content: self.message, final: false)
+            return (decrypted, decapsulator.recipient)
+        }
+        #endif
     }
 
     /// Processor for a series of response chunks.
