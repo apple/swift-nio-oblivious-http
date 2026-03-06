@@ -418,6 +418,55 @@ public enum ODoH: Sendable {
             return try self.decryptQuery(query: query, privateKey: privateKey)
         }
 
+        #if !canImport(Darwin) || canImport(CryptoKit, _version: 324.0.4)
+        /// Decrypt DNS query using server's KEM private key.
+        @available(iOS 26.0, macOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
+        public func decryptQuery<PrivateKey: HPKEKEMPrivateKey>(
+            query: Message,
+            privateKey: PrivateKey
+        ) throws -> QueryDecryptionResult {
+            guard query.messageType == .query else {
+                throw ObliviousDoHError.invalidMessageType(
+                    expected: .query,
+                    actual: query.messageType
+                )
+            }
+
+            var ciphertext = query.encryptedMessage
+            guard let enc = ciphertext.popFirst(self.core.ct.kem.encapsulatedKeySize) else {
+                throw CryptoKitError.incorrectParameterSize
+            }
+
+            // Setup HPKE recipient context
+            var context = try HPKE.Recipient(
+                privateKey: privateKey,
+                ciphersuite: self.core.ct,
+                info: Data.oDoHQueryInfo,
+                encapsulatedKey: enc
+            )
+
+            // Decrypt query
+            var plaintext = try context.open(
+                ciphertext,
+                authenticating: self.core.aad(.query, key: self.core.keyID)
+            )
+
+            return QueryDecryptionResult(plaintextQuery: try MessagePlaintext(decoding: &plaintext), context: context)
+        }
+
+        /// Decrypt DNS query using server's KEM private key.
+        @available(iOS 26.0, macOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
+        public func decryptQuery<PrivateKey: HPKEKEMPrivateKey>(
+            queryData: consuming Data,
+            privateKey: PrivateKey
+        ) throws -> QueryDecryptionResult {
+            // Parse the query message
+            let query = try Message(decoding: &queryData)
+
+            return try self.decryptQuery(query: query, privateKey: privateKey)
+        }
+        #endif
+
         /// Encrypt DNS response using derived keys from HPKE context.
         ///
         /// Uses HPKE secret export and random nonce for stateless operation.
@@ -638,6 +687,28 @@ public enum ODoH: Sendable {
             )
             return .init(contentsBacking: .v1(contents))
         }
+
+        #if !canImport(Darwin) || canImport(CryptoKit, _version: 324.0.4)
+        /// Create ODoH v1 configuration with XWing post-quantum algorithm suite.
+        ///
+        /// Constructs a version 1 ODoH configuration using XWing KEM with
+        /// HKDF-SHA256 and AES-256-GCM.
+        ///
+        /// - Parameter privateKey: XWing private key of the server
+        /// - Returns: Complete ODoH configuration ready for use
+        /// - Throws: `CryptoKitError` if key serialization fails
+        @available(iOS 26.0, macOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
+        public static func v1(privateKey: Crypto.XWingMLKEM768X25519.PrivateKey) throws -> Self {
+            let kem: HPKE.KEM = .XWingMLKEM768X25519
+            let contents = ConfigurationContents(
+                kem: kem,
+                kdf: .HKDF_SHA256,
+                aead: .AES_GCM_256,
+                publicKey: try privateKey.publicKey.hpkeRepresentation(kem: kem)
+            )
+            return .init(contentsBacking: .v1(contents))
+        }
+        #endif
     }
 
     /// Configuration contents specifying cryptographic algorithms and public key.

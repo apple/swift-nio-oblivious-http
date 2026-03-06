@@ -151,7 +151,6 @@ final class ObliviousDoHTests: XCTestCase {
 
         XCTAssertNotEqual(response.encode(), encryptedResponse)
 
-        // 4. Client decrypts response
         let decryptedResponse = try clientRoutine.decryptResponse(
             queryEncryptionResult: queryEncryptResult,
             queryPlain: query,
@@ -159,4 +158,50 @@ final class ObliviousDoHTests: XCTestCase {
         )
         XCTAssertEqual(response, decryptedResponse)
     }
+
+    #if !canImport(Darwin) || canImport(CryptoKit, _version: 324.0.4)
+    func testObliviousDoHRoundtrip_XWing() throws {
+        guard #available(iOS 26.0, macOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *) else {
+            throw XCTSkip("XWing not available")
+        }
+
+        let request = "Hello world!"
+        let responseText = "Hello from ObliviousX"
+
+        let serverPrivateKey = try XWingMLKEM768X25519.PrivateKey()
+        let configuration = try ODoH.Configuration.v1(privateKey: serverPrivateKey)
+
+        let clientRoutine = try ODoH.ClientRoutine(configuration: configuration)
+        let serverRoutine = try ODoH.ServerRoutine(configuration: configuration)
+
+        let query = ODoH.MessagePlaintext(dnsMessage: Data(request.utf8), paddingLength: 128)
+        let queryEncryptResult = try clientRoutine.encryptQuery(
+            queryPlain: query
+        )
+
+        XCTAssertNotEqual(query.encode(), queryEncryptResult.encryptedQuery)
+
+        let queryDecryptResult = try serverRoutine.decryptQuery(
+            queryData: queryEncryptResult.encryptedQuery,
+            privateKey: serverPrivateKey
+        )
+
+        XCTAssertEqual(query, queryDecryptResult.plaintextQuery)
+
+        let response = ODoH.MessagePlaintext(dnsMessage: Data(responseText.utf8), paddingLength: 64)
+        let encryptedResponse = try serverRoutine.encryptResponse(
+            queryDecryptionResult: queryDecryptResult,
+            responsePlain: response
+        )
+
+        XCTAssertNotEqual(response.encode(), encryptedResponse)
+
+        let decryptedResponse = try clientRoutine.decryptResponse(
+            queryEncryptionResult: queryEncryptResult,
+            queryPlain: query,
+            responseData: encryptedResponse
+        )
+        XCTAssertEqual(response, decryptedResponse)
+    }
+    #endif
 }
