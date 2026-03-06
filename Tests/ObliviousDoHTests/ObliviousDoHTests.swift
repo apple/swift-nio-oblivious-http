@@ -151,7 +151,6 @@ final class ObliviousDoHTests: XCTestCase {
 
         XCTAssertNotEqual(response.encode(), encryptedResponse)
 
-        // 4. Client decrypts response
         let decryptedResponse = try clientRoutine.decryptResponse(
             queryEncryptionResult: queryEncryptResult,
             queryPlain: query,
@@ -197,7 +196,6 @@ final class ObliviousDoHTests: XCTestCase {
 
         XCTAssertNotEqual(response.encode(), encryptedResponse)
 
-        // 4. Client decrypts response
         let decryptedResponse = try clientRoutine.decryptResponse(
             queryEncryptionResult: queryEncryptResult,
             queryPlain: query,
