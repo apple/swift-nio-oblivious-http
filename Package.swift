@@ -15,6 +15,8 @@
 
 import PackageDescription
 
+import class Foundation.ProcessInfo
+
 let strictConcurrencyDevelopment = false
 
 let strictConcurrencySettings: [SwiftSetting] = {
@@ -52,8 +54,7 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
-        .package(url: "https://github.com/apple/swift-crypto.git", from: "4.0.0"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0")
     ],
     targets: [
         .target(
@@ -115,6 +116,22 @@ let package = Package(
         ),
     ]
 )
+
+// If the `SWIFT_NIO_OBLIVIOUS_HTTP_ALLOW_SWIFT_CRYPTO_BETA` environment variable is set
+// swift-nio-oblivious-http will accept swift-crypto beta releases as a dependency.
+//
+// Note: A beta release can only be used if other packages in the dependency tree
+// that have a direct dependency on swift-crypto accept beta releases as well.
+if ProcessInfo.processInfo.environment["SWIFT_NIO_OBLIVIOUS_HTTP_ALLOW_SWIFT_CRYPTO_BETA"] == nil {
+    package.dependencies += [
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "4.0.0")
+    ]
+} else {
+    print("Accepting beta versions of swift-crypto!")
+    package.dependencies += [
+        .package(url: "https://github.com/apple/swift-crypto.git", "4.0.0"..<"5.0.0-beta.max")
+    ]
+}
 
 // ---    STANDARD CROSS-REPO SETTINGS DO NOT EDIT   --- //
 for target in package.targets {
