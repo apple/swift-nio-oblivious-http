@@ -15,8 +15,6 @@
 
 import PackageDescription
 
-import class Foundation.ProcessInfo
-
 let strictConcurrencyDevelopment = false
 
 let strictConcurrencySettings: [SwiftSetting] = {
