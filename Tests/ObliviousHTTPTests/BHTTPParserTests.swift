@@ -425,4 +425,44 @@ final class BHTTPParserTests: XCTestCase {
             expectedResults
         )
     }
+
+    func testSwitchingProtocolsIsParsedAsInformationalResponse() throws {
+        // RFC 9292 Section 3.5.1: every status code from 100 to 199 is an informational response
+        // that is followed by another response head, until a final (200-599) status code.
+        let knownLengthResponse: [UInt8] = [
+            0x01,  // Known-length response
+            0x40, 0x65, 0x00,  // 101, empty header section
+            0x40, 0xC8, 0x00,  // 200, empty header section
+            0x05, 0x68, 0x65, 0x6C, 0x6C, 0x6F,  // Content: "hello"
+            0x00,  // Empty trailer section
+        ]
+        let indeterminateLengthResponse: [UInt8] = [
+            0x03,  // Indeterminate-length response
+            0x40, 0x65, 0x00,  // 101, empty header section
+            0x40, 0xC8, 0x00,  // 200, empty header section
+            0x05, 0x68, 0x65, 0x6C, 0x6C, 0x6F, 0x00,  // Content: "hello"
+            0x00,  // Empty trailer section
+        ]
+
+        for response in [knownLengthResponse, indeterminateLengthResponse] {
+            var parser = BHTTPParser(role: .client)
+            parser.append(ByteBuffer(bytes: response))
+            parser.completeBodyReceived()
+
+            var results: [HTTPClientResponsePart] = []
+            while let next = try parser.nextMessage(), case .response(let part) = next {
+                results.append(part)
+            }
+
+            XCTAssertEqual(
+                results,
+                [
+                    .head(.init(version: .http1_1, status: .switchingProtocols)),
+                    .head(.init(version: .http1_1, status: .ok)),
+                    .body(ByteBuffer(string: "hello")),
+                    .end(nil),
+                ]
+            )
+        }
+    }
 }
