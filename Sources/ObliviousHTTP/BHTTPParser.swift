@@ -530,7 +530,9 @@ extension ByteBuffer {
 }
 
 extension HTTPResponseHead {
+    /// Binary HTTP has no protocol upgrade, so unlike HTTP/1.1 it treats 101 like any other
+    /// informational status: RFC 9292 Section 3.5.1 defines informational responses as 100 to 199.
     var isInformational: Bool {
-        100 <= self.status.code && self.status.code < 200 && self.status.code != 101
+        100 <= self.status.code && self.status.code < 200
     }
 }
